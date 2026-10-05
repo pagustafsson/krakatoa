@@ -189,8 +189,8 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
     <section class="group">
       <div class="ghead"><span id="modeLabel">Läge</span><span class="gval"><kbd>M</kbd></span></div>
       <div class="seg" role="group" aria-labelledby="modeLabel">
-        <button type="button" id="mode-particles" aria-pressed="false">Partiklar</button>
-        <button type="button" id="mode-volume" aria-pressed="true">Volym</button>
+        <button type="button" id="mode-particles" aria-pressed="true">Partiklar</button>
+        <button type="button" id="mode-volume" aria-pressed="false">Volym</button>
       </div>
     </section>
 
@@ -295,7 +295,7 @@ const SLIDERS = {
   'g-flow': [
     ['swirl', 'Virvlar', 0, 60, 1, (v) => v.toFixed(0)],
     ['turbulence', 'Turbulens', 0, 3, 0.05, (v) => v.toFixed(2)],
-    // particles: mean particle life; Volym: how long a puff stays visible after it leaves the emitter
+    // particles: mean particle life; Volym: how long smoke stays visible after it leaves the emitter (volLife)
     ['life', 'Livslängd', 0.3, 3, 0.05, (v) => (P.mode === 'volume' ? volLife(v) : 3.3 * v).toFixed(1) + ' s'],
   ],
   'g-render': [
@@ -1776,7 +1776,7 @@ function updateParticles(dt, time, frame) {
 const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
 const emitRadius = () => P.brush * 1.6; // screen heights
 const V_TAU = 3.0; // density e-folding time per unit of Livslängd (s)
-// Livslängd label in Volym: seconds until a puff no longer shows (alpha < 0.05) after it leaves the emitter, measured
+// Livslängd label in Volym: seconds until smoke no longer shows (alpha < 0.05) after it leaves the emitter, measured
 // at Hög with default lift. It saturates because old smoke spreads thin and rises off screen; coarser grids fade
 // sooner (Medel about 25 %, Låg about 35 %).
 const volLife = (v) => 10.9 * (1 - Math.exp(-v / 1.72));
@@ -2117,15 +2117,24 @@ function setPalette(i) {
   $('paletteName').textContent = p.name;
   document.querySelectorAll('.swatch').forEach((b, j) => b.setAttribute('aria-pressed', String(j === i)));
 }
+// A swatch shows the colours the current mode uses, from emission to the oldest smoke. Partiklar: the hot cycle
+// into the cool colour. Volym: its emission band (hot[0] ↔ hot[3], see emitHue), the ember glow, then the albedo
+// of cooled and of the oldest smoke.
+function swatchBg(p) {
+  return P.mode === 'volume'
+    ? `linear-gradient(110deg, ${p.hot[0]} 0%, ${p.hot[3]} 22%, ${p.ember} 45%, ${p.smoke} 72%, ${p.tail} 100%)`
+    : `linear-gradient(110deg, ${p.hot[0]} 0%, ${p.hot[1]} 30%, ${p.hot[2]} 55%, ${p.cool} 100%)`;
+}
+function paintSwatches() { PALETTES.forEach((p, i) => { $('pal-' + i).style.background = swatchBg(p); }); }
 PALETTES.forEach((p, i) => {
   const b = document.createElement('button');
   b.type = 'button'; b.className = 'swatch'; b.id = 'pal-' + i;
   b.title = p.name + ' (' + (i + 1) + ')';
   b.setAttribute('aria-label', 'Palett ' + p.name);
-  b.style.background = `linear-gradient(110deg, ${p.hot[0]} 0%, ${p.hot[1]} 30%, ${p.hot[2]} 55%, ${p.cool} 100%)`;
   b.addEventListener('click', () => setPalette(i));
   $('swatches').appendChild(b);
 });
+paintSwatches();
 
 const qSel = $('quality');
 for (const [k, q] of Object.entries(QUALITY)) {
@@ -2161,9 +2170,12 @@ qSel.addEventListener('change', () => {
 const MODES = [['particles', 'mode-particles'], ['volume', 'mode-volume']];
 function setMode(m) {
   if (m !== 'volume' || !volOK) m = 'particles';
+  // each mode has its own autopilot path: re-seed the brush on the new one, so it never strokes across the screen
+  if (m !== P.mode) demo.on = false;
   P.mode = m;
   try { localStorage.setItem('krakatoa.mode', m); } catch (_) { /* storage is optional */ }
   const vol = m === 'volume';
+  const prevFocus = document.activeElement;
   for (const [val, id] of MODES) $(id).setAttribute('aria-pressed', String(m === val));
   $('g-volume').hidden = !vol;
   // controls that only affect the particle renderer
@@ -2171,10 +2183,13 @@ function setMode(m) {
   for (const id of ['t-showSmoke', 't-showParticles']) $(id).closest('label').hidden = vol;
   $('hudPartBox').hidden = vol;
   $('hudPartSep').hidden = vol;
+  // M on a control that this mode hides: keep keyboard focus in the panel, on the button of the mode now shown
+  if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
   if (sliderSync.life) sliderSync.life();
   gov.slow = 0;
   updateGridHud();
   qualityLabels();
+  paintSwatches();
 }
 for (const [val, id] of MODES) $(id).addEventListener('click', () => setMode(val));
 if (!volOK) { $('mode-volume').disabled = true; $('mode-volume').title = 'Volymläget stöds inte av den här grafikdrivern'; }

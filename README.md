@@ -1,6 +1,6 @@
 # Krakatoa Smoke
 
-Färgad partikelrök i realtid som följer pekaren när du håller nere musknappen. Inspirerad av partikelrenderaren Krakatoa. Allt ligger i en enda HTML-fil i ren WebGL2, utan bibliotek eller byggsteg.
+Färgad rök i realtid som följer pekaren när du håller nere musknappen, antingen som miljontals fina partiklar eller som en riktig 3D-simulering av rök. Inspirerad av partikelrenderaren Krakatoa. Allt ligger i en enda HTML-fil i ren WebGL2, utan bibliotek eller byggsteg.
 
 ## Kom igång
 
@@ -17,9 +17,9 @@ Gå sedan till `http://localhost:8000`.
 ## Lägen
 
 - **Partiklar**: miljontals fina partiklar som lyser ihop, med strängar och slöjor av rök.
-- **Volym**: fluffig, bollig rök där det som sprutar ut glöder gulgrönt och snabbt åldras till matt, upplyst blått. Puffarna skuggar varandra och lyses upp av glöden.
+- **Volym**: rök i tre dimensioner. Gasen vid penseln är het och glöder, stiger av sig själv, svalnar och blir till rök som virvlar, skuggar sig själv och lyses upp av glöden. Med paletten Aurora glöder den gulgrönt och blir sedan upplyst blå.
 
-Byt läge med knappen överst i panelen eller med M. Valt läge sparas till nästa besök. Lägg till `#volym` eller `#partiklar` sist i adressen för att öppna ett visst läge direkt.
+Byt läge med knappen överst i panelen eller med M. Första gången startar sidan i Partiklar, sedan sparas valt läge till nästa besök. Lägg till `#volym` eller `#partiklar` sist i adressen för att öppna ett visst läge direkt. Varje läge simulerar bara sin egen rök, så den andra står kvar orörd tills du byter tillbaka. Palettrutorna visar färgerna i det läge du är i.
 
 ## Styrning
 
@@ -32,19 +32,47 @@ Byt läge med knappen överst i panelen eller med M. Valt läge sparas till näs
 | M | Byt mellan Partiklar och Volym |
 | 1–5 | Byt palett: Aurora, Nebula, Magma, Spektrum, Aska |
 
-I panelen ställer du in kvalitet (262 000 till 4,2 miljoner partiklar), pensel, flöde, ljus, skuggor och glöd.
+I panelen ställer du in kvalitet, pensel, flöde, ljus, skuggor och glöd. Kvaliteten bestämmer antalet partiklar i Partiklar och storleken på 3D-gridet i Volym. Gridet följer fönstrets form, och menyn visar det grid du får i ditt fönster. Så här blir det i ett fönster på 1920 × 1080:
+
+| Kvalitet | Partiklar | Volym |
+| --- | --- | --- |
+| Låg | 262 000 | 100 × 56 × 36 |
+| Medel | 1 miljon | 136 × 76 × 52 |
+| Hög | 2,1 miljoner | 200 × 112 × 76 |
+| Ultra | 4,2 miljoner | 228 × 128 × 84 |
+
+Volym har två egna reglage, och Livslängd betyder något annat där:
+
+- **Avsvalning** styr hur snabbt den heta gasen svalnar. Ett kort värde ger en liten glödande låga. Ett långt värde låter gasen glöda och stiga längre.
+- **Lyftkraft** styr hur starkt het gas stiger, från 0 till 3 gånger det normala. På 0 stiger röken inte av sig själv.
+- **Livslängd** styr hur länge röken finns kvar och hur snabbt den går över i palettens äldsta färg. Värdet visar ungefär hur många sekunder röken syns efter att den lämnat penseln, från cirka 2 till 9 sekunder. Det planar ut eftersom gammal rök tunnas ut och stiger ut ur bilden. På lägre kvalitet försvinner röken lite tidigare.
+
+Reglagen Rökfält och Partikeltäthet och de två första brytarna under Lager gäller bara Partiklar och döljs i Volym.
 
 ## Så fungerar det
+
+### Partiklar
 
 1. **Vätskesimulering.** En Navier–Stokes-lösare på grafikkortet, i stil med Stams *Stable Fluids*. Den har virvelförstärkning och turbulens från curl-brus. Penseldrag läggs in som utsmetade Gauss-fläckar längs pekarens väg, så att snabba drag inte lämnar luckor.
 2. **Partiklar.** Positionerna lagras i en flyttalstextur och flyttas av hastighetsfältet. Ovanpå det läggs finare curl-brus för tunna strängar. Nya partiklar föds ur en ringbuffert längs penseldraget.
 3. **Färg.** Röken föds i en varm färg som skiftar medan du ritar och svalnar sedan mot palettens kalla färg.
 4. **Ljus.** En ljuskälla vid pekaren kastar skuggor genom röken med en strålmarsch i skärmrymden. Rökens täthet ger ytor med form, och ett svagt toppljus lyser upp resten.
-5. **Volymläget.** En egen population på 6 000–41 000 rökpuffar, beroende på kvalitet, flyttas av samma strömning. Varje puff ritas som en klumpig, belyst sfär, de äldsta först så att den glödande nya röken hamnar överst. En täthetskarta över puffarna ger skuggor mot ljuset vid pekaren. En suddig karta över den unga röken fungerar som ljuskälla och ger blå puffar nära huvudet grönt ljus.
-6. **Efterbehandling.** HDR-bild med glöd, ACES-tonmappning, vinjett och dithering.
 
-I Volym styr **Avsvalning** hur snabbt den glödande röken övergår till den åldrade färgen, och **Puffstorlek** hur stora bollarna blir.
+### Volym
+
+1. **3D-grid.** Röken simuleras i en låda bakom skärmen, uppdelad i kubiska celler: 56 till 128 celler på skärmens kortsida beroende på kvalitet, och två tredjedelar så många på djupet. Varje skiva i djupled ligger som en ruta i en stor 2D-textur, så att varje delsteg i lösaren blir ett enda ritanrop.
+2. **Transport.** Täthet, temperatur och färskhet (hur ny röken är) flyttas med strömningen enligt MacCormack-metoden, som behåller skarpare detaljer än en vanlig semi-Lagrange-lösare. Lådans sidor är öppna, så rök som lämnar den försvinner och ren luft strömmar in.
+3. **Krafter.** Het gas stiger (Lyftkraft). Virvelförstärkningen (Virvlar) verkar bara där det finns rök, och ett mjukt turbulensfält (Turbulens) håller röken i rörelse. Penseln är en mjuk sfär i lådans mittplan som värmer gasen, fyller på rök och drar gasen med sig åt det håll du drar.
+4. **Tryck.** Luft går inte att pressa ihop. En tryckberäkning med 16 till 30 Jacobi-iterationer per bildruta, beroende på kvalitet, justerar hastigheterna så att lika mycket luft strömmar ut ur varje cell som in i den. Det är den som får röken att välla fram och rulla runt sig själv.
+5. **Ljus.** Varje bildruta kopieras tätheten till en 3D-textur. En ljusvolym i halva upplösningen räknar ut hur mycket ljus som når varje punkt från ett ljus i glödens färg vid pekaren och från ett toppljus snett ovanifrån, med skuggor genom röken.
+6. **Strålföljning.** En bild i lägre upplösning än skärmen skickar en stråle per pixel genom lådan, en cell i taget. Röken dämpar ljuset bakom sig, sprider ljuset från ljusvolymen mot kameran och glöder där den är het. Bilden skalas sedan mjukt upp till skärmen.
+7. **Detaljer finare än gridet.** I stora, svalnade rökmoln förskjuts tätheten med ett brus som följer strömningen, så att detaljerna töjs ut och virvlar med röken. Bruset finns i två omgångar som startar om var 1,2 sekund, förskjutna en halv period, och tonas över i varandra så att det aldrig hinner töjas ut för mycket. Den heta lågan och snabba strålar får inget brus.
+8. **Automatisk kvalitet.** Om bildfrekvensen ligger under 50 bilder per sekund i två sekunder byter Volym till ett grövre grid, högst ett steg var tredje sekund och aldrig under Låg. Röken flyttas över till det nya gridet. Rubriken Kvalitet visar då ”sänkt till …” och raden längst ned till vänster visar det grid som körs. Väljer du en kvalitet i menyn börjar Volym om från den nivån. Partiklar påverkas inte.
+
+Båda lägena avslutas likadant: HDR-bild med glöd, ACES-tonmappning, vinjett och dithering.
 
 ## Krav
 
 WebGL2 med tillägget `EXT_color_buffer_float`. Det finns i alla moderna skrivbordswebbläsare och i Safari på iOS 15 och senare.
+
+Volym behöver dessutom kunna rendera till 3D-texturer i flyttalsformat. Om grafikkortet inte klarar det är Volym-knappen avstängd och sidan visar Partiklar.
