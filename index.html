@@ -31,6 +31,7 @@ body {
   user-select: none; -webkit-user-select: none;
 }
 #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+#gl:focus { outline: none; }
 
 .rail {
   position: fixed; z-index: 2;
@@ -74,6 +75,19 @@ body {
 }
 .swatch:hover { transform: translateY(-1px); }
 .swatch[aria-pressed="true"] { box-shadow: 0 0 0 1.5px var(--void), 0 0 0 3px var(--ink); }
+
+.seg {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 9px;
+  background: rgba(255,255,255,0.04); border: 1px solid var(--glass-edge);
+}
+.seg button {
+  height: 26px; border: 0; border-radius: 7px; cursor: pointer; background: transparent;
+  color: var(--ink-dim); font: 500 12px var(--font-ui); transition: background .15s, color .15s;
+}
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: rgba(255,255,255,0.1); color: var(--ink); box-shadow: inset 0 0 0 1px var(--glass-edge); }
+.seg button:disabled { opacity: 0.4; cursor: not-allowed; }
+.seg button:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; }
 
 select {
   width: 100%; height: 30px; padding: 0 10px; border-radius: 8px; cursor: pointer;
@@ -150,13 +164,13 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
   .hint { bottom: calc(48px + env(safe-area-inset-bottom, 0px)); font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .hint, .swatch, .switch input, .switch input::after { transition: none; }
+  .hint, .swatch, .switch input, .switch input::after, .seg button { transition: none; }
 }
 </style>
 </head>
 <body>
 
-<canvas id="gl" aria-label="Rökfält. Håll nere musknappen och dra för att släppa ut färgad partikelrök."></canvas>
+<canvas id="gl" tabindex="-1" aria-label="Rökfält. Håll nere musknappen och dra för att släppa ut färgad partikelrök."></canvas>
 
 <div class="rail">
   <button class="iconbtn" id="panelToggle" type="button" aria-expanded="true" aria-controls="panel" title="Inställningar (H)">
@@ -173,6 +187,14 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
     </header>
 
     <section class="group">
+      <div class="ghead"><span id="modeLabel">Läge</span><span class="gval"><kbd>M</kbd></span></div>
+      <div class="seg" role="group" aria-labelledby="modeLabel">
+        <button type="button" id="mode-particles" aria-pressed="false">Partiklar</button>
+        <button type="button" id="mode-volume" aria-pressed="true">Volym</button>
+      </div>
+    </section>
+
+    <section class="group">
       <div class="ghead"><span>Palett</span><span class="gval" id="paletteName">Aurora</span></div>
       <div class="swatches" id="swatches"></div>
     </section>
@@ -185,6 +207,7 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
     <section class="group" id="g-brush"><div class="ghead"><span>Pensel</span></div></section>
     <section class="group" id="g-flow"><div class="ghead"><span>Flöde</span></div></section>
     <section class="group" id="g-render"><div class="ghead"><span>Ljus och rendering</span></div></section>
+    <section class="group" id="g-volume"><div class="ghead"><span>Volym</span></div></section>
 
     <section class="group toggles">
       <div class="ghead"><span>Lager</span></div>
@@ -201,7 +224,7 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
   </aside>
 </div>
 
-<div class="hud" id="hud"><span><b id="hudParticles">–</b> partiklar</span><span>·</span><span>grid <b id="hudGrid">–</b></span><span>·</span><span><b id="hudFps">–</b> fps</span></div>
+<div class="hud" id="hud"><span><b id="hudParticles">–</b> partiklar</span><span>·</span><span>grid <b id="hudGrid">–</b></span><span>·</span><span><b id="hudFps">–</b> fps</span><span id="hudPuffSep" hidden>·</span><span id="hudPuffBox" hidden><b id="hudPuffs">–</b> rökpuffar</span></div>
 <div class="hint" id="hint">Håll nere musknappen och dra</div>
 <div class="fail" id="fail" hidden><div><h1>Rökfältet kunde inte starta</h1><p></p></div></div>
 
@@ -231,23 +254,27 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
 // sim: velocity grid (short side), dye: smoke field (short side), pw×ph: particle state texture, accum: particle buffer vs CSS px
+// Volume mode only: fw×fh: puff state texture, puff: puff buffer vs CSS px, vl: puff light/shadow map (short side)
 const QUALITY = {
-  low:    { label: 'Låg',   sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6 },
-  medium: { label: 'Medel', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8 },
-  high:   { label: 'Hög',   sim: 160, dye: 1024, pw: 2048, ph: 1024, accum: 1.0 },
-  ultra:  { label: 'Ultra', sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0 },
+  low:    { label: 'Låg',   sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, fw: 96,  fh: 64,  puff: 0.35, vl: 160 },
+  medium: { label: 'Medel', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, fw: 128, fh: 96,  puff: 0.42, vl: 192 },
+  high:   { label: 'Hög',   sim: 160, dye: 1024, pw: 2048, ph: 1024, accum: 1.0, fw: 192, fh: 128, puff: 0.6,  vl: 224 },
+  ultra:  { label: 'Ultra', sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0, fw: 256, fh: 160, puff: 0.75, vl: 256 },
 };
 
 // hot = colour at emission (cycles while you draw), cool = colour the smoke ages into
+// tail = colour of the far, oldest smoke (volume mode only)
 const PALETTES = [
-  { name: 'Aurora',   hot: ['#d6ff3c', '#4dffa0', '#24e4ff', '#9cff4a'], cool: '#1a3bff', key: '#2c4cff', bg: ['#010207', '#041026'] },
-  { name: 'Nebula',   hot: ['#ff2fa2', '#ff4d6d', '#c43cff', '#ff6fd6'], cool: '#1c88ff', key: '#5a2cff', bg: ['#030107', '#14062e'] },
-  { name: 'Magma',    hot: ['#fff09a', '#ffb03c', '#ff651c', '#ffd25a'], cool: '#7c0e1e', key: '#ff4a24', bg: ['#040202', '#1a0605'] },
-  { name: 'Spektrum', hot: ['#ff3b5c', '#ffd33b', '#3bffb2', '#3b8cff'], cool: '#4a1fb0', key: '#5b3cff', bg: ['#030308', '#0c0a22'] },
-  { name: 'Aska',     hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'] },
+  { name: 'Aurora',   hot: ['#d6ff3c', '#4dffa0', '#24e4ff', '#9cff4a'], cool: '#1a3bff', key: '#2c4cff', bg: ['#010207', '#041026'], tail: '#4b2bff' },
+  { name: 'Nebula',   hot: ['#ff2fa2', '#ff4d6d', '#c43cff', '#ff6fd6'], cool: '#1c88ff', key: '#5a2cff', bg: ['#030107', '#14062e'], tail: '#4a2ad8' },
+  { name: 'Magma',    hot: ['#fff09a', '#ffb03c', '#ff651c', '#ffd25a'], cool: '#7c0e1e', key: '#ff4a24', bg: ['#040202', '#1a0605'], tail: '#5a0a2a' },
+  { name: 'Spektrum', hot: ['#ff3b5c', '#ffd33b', '#3bffb2', '#3b8cff'], cool: '#4a1fb0', key: '#5b3cff', bg: ['#030308', '#0c0a22'], tail: '#3a1a9a' },
+  { name: 'Aska',     hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'], tail: '#3a4050' },
 ];
 
 const P = {
+  mode: 'particles', // 'particles' = fine additive particle smoke, 'volume' = lit puff impostors
+  coolTime: 0.6, puffSize: 1.0,
   quality: coarse ? 'medium' : 'high',
   palette: 0,
   brush: 0.03, emission: 1.0, force: 1.0,
@@ -275,6 +302,10 @@ const SLIDERS = {
     ['light', 'Ljus', 0, 3, 0.05, (v) => v.toFixed(2)],
     ['shadows', 'Skuggor', 0, 3, 0.05, (v) => v.toFixed(2)],
     ['bloom', 'Glöd', 0, 2, 0.05, (v) => v.toFixed(2)],
+  ],
+  'g-volume': [
+    ['coolTime', 'Avsvalning', 0.2, 2, 0.05, (v) => v.toFixed(2).replace('.', ',') + ' s'],
+    ['puffSize', 'Puffstorlek', 0.5, 2, 0.05, (v) => '×' + v.toFixed(2)],
   ],
 };
 
@@ -604,6 +635,272 @@ void main() {
 }`;
 
 /* ------------------------------------------------------------------ */
+/* Volume mode shaders ("lit puff impostors")                         */
+/* ------------------------------------------------------------------ */
+// Fullscreen passes for volume mode. Kept apart from FS so a compile failure here only
+// disables volume mode instead of the whole page.
+const VFS = {
+  // Shadow/light map: march from each texel toward the point light through the puffs' own
+  // (saturated) density. rgb = incoming light colour (falloff × transmittance), a = transmittance.
+  vLight: COMMON + `uniform sampler2D uDens; uniform vec2 uLight;
+uniform float uAbsorb, uAspect, uFalloff, uFrameF, uDK; uniform vec3 uLightCol;
+float D(vec2 p) { return 1.0 - exp(-texture(uDens, p).a * uDK); }
+void main() {
+  vec2 toL = uLight - vUv;
+  float dist = length(toL * vec2(uAspect, 1.0));
+  float jit = ign(gl_FragCoord.xy + uFrameF * 5.588238);
+  float sum = 0.0;
+  const int STEPS = 24;
+  for (int i = 0; i < STEPS; i++) sum += D(vUv + toL * ((float(i) + jit) / float(STEPS)));
+  float T = exp(-sum / float(STEPS) * dist * uAbsorb);
+  float fall = 1.0 / (1.0 + dist * dist * uFalloff);
+  o = vec4(uLightCol * fall * T, T);
+}`,
+
+  // Downsample the puff density map into a glow source: hue of the young smoke's emission with a saturating
+  // magnitude. a keeps the raw density so the blurred result doubles as a wide occlusion/isolation term.
+  vGlowPre: `uniform sampler2D uSrc; uniform vec2 uTexel; uniform float uGain, uK;
+void main() {
+  vec2 t = uTexel;
+  vec4 s = (texture(uSrc, vUv + vec2(-t.x, -t.y)) + texture(uSrc, vUv + vec2(t.x, -t.y))
+          + texture(uSrc, vUv + vec2(-t.x, t.y)) + texture(uSrc, vUv + vec2(t.x, t.y))) * 0.25;
+  float le = max(s.r, max(s.g, s.b));
+  o = vec4(s.rgb / (le + 1e-4) * (1.0 - exp(-le * uK)) * uGain, s.a);
+}`,
+
+  // Background, faint lit haze from the dye field, the premultiplied puff layer, emissive wisps and the glow halo
+  vComposite: `uniform sampler2D uPuff, uAcc, uGlow, uDye, uLit;
+uniform float uAspect, uAir, uWisp, uHalo, uHaze;
+uniform vec3 uBg0, uBg1, uLightCol, uTail, uAmb;
+uniform vec2 uLightPos;
+void main() {
+  vec2 q = (vUv - vec2(0.5, 0.42)) * vec2(uAspect, 1.0);
+  vec3 bg = mix(uBg1, uBg0, smoothstep(0.0, 1.0, length(q)));
+  vec2 dl = (vUv - uLightPos) * vec2(uAspect, 1.0);
+  bg += uLightCol * uAir / (1.0 + dot(dl, dl) * 30.0);
+  vec3 G = texture(uGlow, vUv).rgb;
+  float hz = (1.0 - exp(-texture(uDye, vUv).a * uHaze)) * 0.7;
+  vec3 col = mix(bg, uTail * (uAmb + texture(uLit, vUv).rgb * 0.5 + G * 0.6), hz);
+  vec4 pf = texture(uPuff, vUv);
+  col = pf.rgb + col * (1.0 - pf.a);
+  col += texture(uAcc, vUv).rgb * uWisp + G * uHalo;
+  o = vec4(col, 1.0);
+}`,
+};
+
+// One puff = one camera-facing quad (6 vertices, no attributes). Drawn in ring order starting at the
+// oldest puff (uOffset = head), so with "over" blending the newest, hottest smoke ends up on top.
+// The SHADE variant also reads the glow field at the puff centre (colour, gradient = direction to the glow).
+function vsPuff(shade) {
+  return `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uState;
+uniform sampler2D uGlow;
+uniform sampler2D uVel;
+uniform int uW, uTotal, uOffset;
+uniform float uAspect, uLifeMin, uLifeMax, uHot0, uHot1, uR0, uGrow, uDens0, uDens1, uEmis, uFade, uFadeN, uStretch;
+uniform vec3 uHot[4];
+uniform vec3 uAlb, uTail;
+uniform vec2 uGlowTexel, uVelTexel;
+out vec3 vHot; out vec3 vAlb; out vec4 vP; out vec2 vQ; out vec3 vG; out vec4 vGd; out vec2 vRot; out vec3 vBody; out vec3 vSAlb;
+${COMMON}
+const bool SHADE = ${shade ? 'true' : 'false'};
+const vec2 CORNER[6] = vec2[6](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0));
+float mx(vec3 c) { return max(c.r, max(c.g, c.b)); }
+float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+vec3 pal(float t) {
+  t = fract(t) * 4.0; int i = int(t);
+  return mix(uHot[i], uHot[(i + 1) & 3], smoothstep(0.0, 1.0, fract(t)));
+}
+void main() {
+  int pi = gl_VertexID / 6;
+  int c = gl_VertexID - pi * 6;
+  int id = (pi + uOffset) % uTotal;
+  vec4 s = texelFetch(uState, ivec2(id % uW, id / uW), 0);
+  uint h = pcg(uint(id) * 2654435761u + 0x85EBCA6Bu);
+  float r1 = float(h & 1023u) * (1.0 / 1023.0);
+  float r2 = float((h >> 10u) & 1023u) * (1.0 / 1023.0);
+  float r3 = float(h >> 20u) * (1.0 / 4095.0);
+  float age = s.z;
+  float k = age / mix(uLifeMin, uLifeMax, r1);
+  if (k >= 1.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    vHot = vec3(0.0); vAlb = vec3(0.0); vP = vec4(0.0); vQ = vec2(0.0); vG = vec3(0.0); vGd = vec4(0.0); vRot = vec2(1.0, 0.0);
+    vBody = vec3(0.0); vSAlb = vec3(0.0);
+    return;
+  }
+  // hot: 1 at birth, falls to 0 over [uHot0, uHot1] seconds (emissive → lit)
+  float hot = 1.0 - smoothstep(uHot0, uHot1, age);
+  float fin = smoothstep(0.0, 0.06, age);
+  // fade at end of life, and for the oldest ring slots that are about to be respawned
+  float fout = (1.0 - smoothstep(uFade, 1.0, k)) * clamp(float(pi) / uFadeN, 0.0, 1.0);
+  float tail = smoothstep(0.15, 0.85, k);
+  float sr = 0.5 + 0.9 * r2 * sqrt(r2);
+  float rad = uR0 * sr * (0.55 + uGrow * sqrt(age));
+  float dens = mix(uDens0, uDens1, 1.0 - hot) * mix(1.0, 0.4, tail) * fin * fout;
+  // albedo: hot colour → saturated mid tone (cyan/teal for Aurora) → cool → tail
+  vec3 hc = pal(s.w);
+  vec3 m = mix(hc, uAlb, 0.5);
+  float l = luma(m);
+  m = max(vec3(l) + (m - vec3(l)) * 2.2, vec3(0.0));
+  m *= 0.85 * max(mx(hc), mx(uAlb)) / max(mx(m), 1e-3);
+  float cz = 1.0 - hot;
+  vec3 alb = cz < 0.5 ? mix(hc, m, cz * 2.0) : mix(m, uAlb, cz * 2.0 - 1.0);
+  alb = mix(alb, uTail, tail);
+  vHot = hc;
+  vAlb = alb;
+  // per-puff shading constants: deeper, more saturated emissive body; scatter albedo for coloured light
+  vBody = pow(hc, vec3(1.8)) * (mx(hc) / max(mx(pow(hc, vec3(1.8))), 1e-4));
+  vSAlb = mix(alb, vec3(mx(alb)), 0.25);
+  vP = vec4(uEmis * hot * hot * fin * fout, dens, rad, r3);
+  vec2 q = CORNER[c];
+  vQ = q;
+  vG = vec3(0.0);
+  vGd = vec4(0.0, 0.0, 1.0, 0.0);
+  if (SHADE) {
+    vec2 gt = uGlowTexel * 2.0;
+    vec4 g0 = texture(uGlow, s.xy);
+    float gx = luma(texture(uGlow, s.xy + vec2(gt.x, 0.0)).rgb) - luma(texture(uGlow, s.xy - vec2(gt.x, 0.0)).rgb);
+    float gy = luma(texture(uGlow, s.xy + vec2(0.0, gt.y)).rgb) - luma(texture(uGlow, s.xy - vec2(0.0, gt.y)).rgb);
+    vG = g0.rgb;
+    vGd = vec4(normalize(vec3(gx, gy, 0.35 * luma(g0.rgb) + 1e-5)), g0.a);
+    // aged puffs that drifted away from the plume get thinner, so they read as haze rather than blobs
+    float iso = smoothstep(1.5, 16.0, g0.a);
+    vP.y *= mix(1.0, mix(0.06, 1.0, iso * iso), 1.0 - hot);
+  }
+  // stretch the puff along the local flow (aspect-corrected space) so lobes get swept, elongated shapes
+  vec2 va = texture(uVel, s.xy).xy * uVelTexel * vec2(uAspect, 1.0);
+  float sp = length(va);
+  vec2 dir = sp > 1e-5 ? va / sp : vec2(1.0, 0.0);
+  float st = 1.0 + min(sp * uStretch, 0.45);
+  vec2 off = q.x * dir * (rad * st) + q.y * vec2(-dir.y, dir.x) * (rad / sqrt(st));
+  vRot = dir;
+  gl_Position = vec4(s.xy * 2.0 - 1.0 + off * 2.0 * vec2(1.0 / uAspect, 1.0), 0.0, 1.0);
+}`;
+}
+
+// Puff density map (additive): rgb = emission × thickness, a = opacity × thickness
+const FS_PUFF_DENS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 vHot; in vec3 vAlb; in vec4 vP; in vec2 vQ;
+uniform float uDW;
+out vec4 o;
+void main() {
+  float r2 = dot(vQ, vQ);
+  if (r2 >= 1.0) discard;
+  float th = (1.0 - r2) * uDW;
+  o = vec4(vHot * (vP.x * th), (1.0 - exp(-vP.y)) * th);
+}`;
+
+// Gradient noise with analytic derivatives for the puff lumps (one hash per corner, no trig).
+// Baked once into a texture (NZ_BAKE) instead of being evaluated per puff fragment.
+const LUMP_NOISE = `
+vec2 hgrad(ivec2 i) {
+  uint h = pcg(uint(i.x) * 1597334677u ^ uint(i.y) * 3812015801u);
+  return vec2(float(h & 0xFFFFu), float(h >> 16u)) * (2.0 / 65535.0) - 1.0;
+}
+vec3 lumpNoise(vec2 p) {
+  vec2 i = floor(p); vec2 f = p - i; ivec2 ii = ivec2(i);
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+  vec2 ga = hgrad(ii), gb = hgrad(ii + ivec2(1, 0)), gc = hgrad(ii + ivec2(0, 1)), gd = hgrad(ii + ivec2(1, 1));
+  float va = dot(ga, f), vb = dot(gb, f - vec2(1.0, 0.0)), vc = dot(gc, f - vec2(0.0, 1.0)), vd = dot(gd, f - vec2(1.0, 1.0));
+  return vec3(va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd),
+              ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd) +
+              du * (u.yx * (va - vb - vc + vd) + vec2(vb, vc) - va));
+}
+`;
+// Bake domain: the shade pass looks up q * 2.2 + (10 + r * 61.7, 10 + r * 23.3) with |q| < 1 and r in [0, 1],
+// i.e. x in [7.8, 73.9], y in [7.8, 35.5]. The baked rectangle [7, 75] × [7, 36] covers it at 16 texels per
+// noise cell (1088 × 464). Changing those constants means changing NZ_ORIGIN/NZ_SPAN and the bake size too.
+const NZ_BAKE = COMMON + LUMP_NOISE + `
+void main() { o = vec4(lumpNoise(vec2(7.0) + vUv * vec2(68.0, 29.0)), 1.0); }`;
+
+// Puff shading: lumpy soft-sphere impostor. Wrap diffuse toward the point light in 3D, shadowed by the
+// light map; key + ambient light darkened in the rims (creases between lobes); light from the nearby glow;
+// young puffs add translucent "glassy" emission. Output is premultiplied for ONE, ONE_MINUS_SRC_ALPHA.
+const FS_PUFF_SHADE = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+in vec3 vHot; in vec3 vAlb; in vec4 vP; in vec2 vQ; in vec3 vG; in vec4 vGd; in vec2 vRot; in vec3 vBody; in vec3 vSAlb;
+uniform sampler2D uLit, uNz;
+uniform vec2 uInvRes, uLight;
+uniform float uLightZ, uAspect, uLump, uEmis;
+uniform vec3 uAmb, uKeyC;
+out vec4 o;
+const vec2 NZ_ORIGIN = vec2(7.0), NZ_SPAN = vec2(68.0, 29.0);
+void main() {
+  vec2 q = vQ;
+  float rq = dot(q, q);
+  if (rq >= 1.0) discard;
+  vec3 nz = texture(uNz, (q * 2.2 + vec2(10.0 + vP.w * 61.7, 10.0 + vP.w * 23.3) - NZ_ORIGIN) / NZ_SPAN).xyz;
+  float r2 = rq * (1.0 + uLump * (0.5 + 0.5 * nz.x));
+  if (r2 >= 1.0) discard;
+  float th = 1.0 - r2;
+  vec3 nl = normalize(vec3(q - uLump * 0.4 * nz.yz, sqrt(th) + 0.03));
+  // local quad frame → screen (the quad is rotated along the flow)
+  vec3 n = vec3(vRot.x * nl.x - vRot.y * nl.y, vRot.y * nl.x + vRot.x * nl.y, nl.z);
+  float hot = clamp(vP.x / max(uEmis, 1e-4), 0.0, 1.0);
+  // soft parabolic profile while young and glassy, firmer silhouette once aged
+  float a = 1.0 - exp(-vP.y * mix(pow(th, 0.7), th, hot));
+  vec2 uv = gl_FragCoord.xy * uInvRes;
+  float rad = vP.z;
+
+  vec3 pos = vec3(uv.x * uAspect, uv.y, n.z * rad);
+  vec3 L = normalize(vec3(uLight.x * uAspect, uLight.y, uLightZ) - pos);
+  float wrap = clamp((dot(n, L) + 0.4) / 1.4, 0.0, 1.0);
+  vec4 lm = texture(uLit, uv + n.xy * (rad * 0.8) * vec2(1.0 / uAspect, 1.0));
+
+  float key = clamp(dot(n, normalize(vec3(-0.35, 0.8, 0.5))) * 0.5 + 0.5, 0.0, 1.0);
+  key *= key;
+  float occ = mix(0.5 + 0.15 * nz.x, 1.0, n.z) * (1.0 - 0.3 * (1.0 - exp(-vGd.w * 0.03)));
+  float gw = clamp((dot(n, vGd.xyz) + 0.3) / 1.3, 0.0, 1.0);
+
+  vec3 lit = vAlb * (uAmb + uKeyC * key) * occ
+           + vSAlb * (lm.rgb * wrap + vG * (0.3 + 0.7 * gw)) * mix(occ, 1.0, 0.5);
+  lit *= 1.0 - 0.85 * hot;
+  // glassy emission: bright rims in the hot colour over a deeper, more saturated body (vBody)
+  // rims broken into irregular arcs by the puff's noise, so overlapping shells read as glassy sheets, not rings
+  float rim = (1.0 - nl.z) * (1.0 - nl.z) * smoothstep(0.0, 0.3, th) * smoothstep(-0.25, 0.45, nz.x);
+  vec3 em = vP.x * (vHot * (2.4 * rim) + vBody * (0.16 * th));
+  o = vec4(lit * a + em, a);
+}`;
+
+// Glassy wisps: only the newest fine particles, drawn from a ring range ending at the head
+const VS_WISP = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uState;
+uniform int uW, uTotal, uOffset;
+uniform float uLifeMin, uLifeMax, uWeight;
+uniform vec3 uHot[4];
+out vec4 vCol;
+${COMMON}
+vec3 pal(float t) {
+  t = fract(t) * 4.0; int i = int(t);
+  return mix(uHot[i], uHot[(i + 1) & 3], smoothstep(0.0, 1.0, fract(t)));
+}
+void main() {
+  int id = (gl_VertexID + uOffset) % uTotal;
+  vec4 s = texelFetch(uState, ivec2(id % uW, id / uW), 0);
+  uint h = pcg(uint(id) + 0x6A09E667u);
+  float r1 = float(h & 0xFFFFu) * (1.0 / 65535.0);
+  float r2 = float(h >> 16u) * (1.0 / 65535.0);
+  float k = s.z / mix(uLifeMin, uLifeMax, r1);
+  if (k >= 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 1.0; vCol = vec4(0.0); return; }
+  float a = smoothstep(0.0, 0.03, s.z) * (1.0 - smoothstep(0.25, 1.0, k));
+  float w = a * mix(0.4, 1.8, r2 * r2) * uWeight;
+  vCol = vec4(pal(s.w) * w, w);
+  gl_Position = vec4(s.xy * 2.0 - 1.0, 0.0, 1.0);
+  gl_PointSize = 1.0;
+}`;
+
+/* ------------------------------------------------------------------ */
 /* GL plumbing                                                        */
 /* ------------------------------------------------------------------ */
 function compile(type, src) {
@@ -639,6 +936,19 @@ try {
   console.error(err);
   fail('En shader gick inte att kompilera på den här grafikdrivern. Detaljer finns i webbläsarens konsol.');
   return;
+}
+// Volume mode programs: if any of them fails, only the volume mode is disabled
+let volOK = true;
+try {
+  pr.puffDens = program(vsPuff(false), FS_PUFF_DENS);
+  pr.puffShade = program(vsPuff(true), FS_PUFF_SHADE);
+  pr.wisps = program(VS_WISP, FS.pFrag);
+  pr.nzBake = program(VS_QUAD, FH + NZ_BAKE);
+  for (const k of Object.keys(VFS)) pr[k] = program(VS_QUAD, FH + VFS[k]);
+} catch (err) {
+  console.error('Volymläget är avstängt:', err);
+  volOK = false;
+  P.mode = 'particles';
 }
 
 let cur = null;
@@ -738,7 +1048,8 @@ let velocity, dye, pressure, divergence, curlT, pstate;
 let accum, dens, densTmp, densBlur, lightT, scene, bloomLv = [];
 let PW = 0, PH = 0, N = 0, head = 0, simScale = 1;
 
-const dims = (res) => aspect >= 1 ? [Math.round(res * aspect), res] : [res, Math.round(res / aspect)];
+// Grid size for a short side of `res`; the long side is capped so extreme window shapes stay within the GPU limit
+const dims = (res) => aspect >= 1 ? [Math.min(maxTex, Math.round(res * aspect)), res] : [res, Math.min(maxTex, Math.round(res / aspect))];
 
 function buildSim() {
   const q = QUALITY[P.quality];
@@ -778,7 +1089,63 @@ function buildScreen() {
   bloomLv = [];
   let w = canvas.width >> 1, h = canvas.height >> 1;
   for (let i = 0; i < 6 && w >= 4 && h >= 4; i++) { bloomLv.push(makeFBO(w, h, FMT.rgba, gl.LINEAR)); w >>= 1; h >>= 1; }
+  if (!bloomLv.length) bloomLv.push(makeFBO(Math.max(1, w), Math.max(1, h), FMT.rgba, gl.LINEAR));
 }
+// Volume mode targets. The puff state ring buffer is small and keeps simulating in both modes, so switching
+// modes keeps the scene. The reduced-res puff layer, density/shadow maps, glow field and baked lump noise
+// exist only while the volume mode is active.
+let pfstate = null, vPuff = null, vDens = null, vTmp = null, vBlur = null, vLit = null, vGlowA = null, vGlowB = null, nzT = null;
+let PFW = 0, PFH = 0, NPF = 0, headPF = 0, emitCarryPF = 0, volScale = 1;
+function initPuffs() {
+  if (!pfstate) return;
+  use(pr.pInit);
+  draw(pfstate.read); draw(pfstate.write);
+  headPF = 0; emitCarryPF = 0;
+}
+function buildPuffs() {
+  if (!volOK) return;
+  const q = QUALITY[P.quality];
+  if (pfstate && PFW === q.fw && PFH === q.fh) return;
+  freeDouble(pfstate);
+  PFW = q.fw; PFH = q.fh; NPF = PFW * PFH;
+  pfstate = makeDouble(PFW, PFH, FMT.rgba32, gl.NEAREST);
+  initPuffs();
+  $('hudPuffs').textContent = NPF.toLocaleString('sv-SE');
+}
+// Big puffs are soft, so their layer can be coarser. Scaling its resolution with the puff radius keeps the
+// fill cost bounded at large Storlek × Puffstorlek; it is 1 at the defaults and quantised to limit rebuilds.
+function puffLayerScale() {
+  const r = P.brush * 1.2 * P.puffSize;
+  return Math.min(1, Math.max(0.35, Math.round((0.036 / r) * 8) / 8));
+}
+function buildVolume() {
+  if (!volOK || P.mode !== 'volume' || !cssW) return;
+  buildPuffs();
+  const q = QUALITY[P.quality];
+  const s = volScale = puffLayerScale();
+  vPuff = remake(vPuff, Math.max(2, Math.round(cssW * q.puff * s)), Math.max(2, Math.round(cssH * q.puff * s)), FMT.rgba, gl.LINEAR);
+  const [lw, lh] = dims(Math.max(64, Math.round(q.vl * s)));
+  vDens = remake(vDens, lw, lh, FMT.rgba, gl.LINEAR);
+  vTmp = remake(vTmp, lw, lh, FMT.rgba, gl.LINEAR);
+  vBlur = remake(vBlur, lw, lh, FMT.rgba, gl.LINEAR);
+  vLit = remake(vLit, lw, lh, FMT.rgba, gl.LINEAR);
+  const [gw, gh] = dims(64);
+  vGlowA = remake(vGlowA, gw, gh, FMT.rgba, gl.LINEAR);
+  vGlowB = remake(vGlowB, gw, gh, FMT.rgba, gl.LINEAR);
+  if (!nzT) { nzT = makeFBO(1088, 464, FMT.rgba, gl.LINEAR); use(pr.nzBake); draw(nzT); }
+}
+function freeVolume() {
+  for (const f of [vPuff, vDens, vTmp, vBlur, vLit, vGlowA, vGlowB, nzT]) freeFBO(f);
+  vPuff = vDens = vTmp = vBlur = vLit = vGlowA = vGlowB = nzT = null;
+}
+// True when this frame should simulate and render the volume mode (builds its targets on demand,
+// so setting krakatoaDebug.P.mode directly also works)
+function volReady() {
+  if (P.mode !== 'volume' || !volOK) return false;
+  if (!vPuff || !pfstate) buildVolume();
+  return !!(vPuff && pfstate);
+}
+
 function resize(force) {
   const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
   const d = Math.min(window.devicePixelRatio || 1, 2);
@@ -788,7 +1155,9 @@ function resize(force) {
   canvas.height = Math.max(1, Math.round(h * d));
   buildSim();
   buildParticles();
+  buildPuffs();
   buildScreen();
+  buildVolume();
 }
 
 /* ------------------------------------------------------------------ */
@@ -800,6 +1169,15 @@ function preparePalette() {
   const p = PALETTES[P.palette];
   const hot = p.hot.map(toLin);
   pal = { hot, hotFlat: new Float32Array(hot.flat()), cool: toLin(p.cool), key: toLin(p.key), bg0: toLin(p.bg[0]), bg1: toLin(p.bg[1]) };
+  // Volume mode: aged albedo (cool, lifted so dark cool colours still read), far-tail albedo, key-tinted ambient/key light
+  const peak = (c) => Math.max(c[0], c[1], c[2], 1e-4);
+  const lift = (c, lo) => c.map((v) => v * Math.max(1, lo / peak(c)));
+  pal.alb = lift(pal.cool, 0.55);
+  const tl = toLin(p.tail || p.cool);
+  pal.tail = tl.map((v) => (v * 0.55) / peak(tl));
+  const kn = pal.key.map((v) => 0.7 + (0.3 * v) / peak(pal.key));
+  pal.amb = kn.map((v) => v * 0.18);
+  pal.keyC = kn.map((v) => v * 0.8);
 }
 function palColor(t) {
   t = (((t % 1) + 1) % 1) * 4;
@@ -820,6 +1198,7 @@ function newEmitter(x, y, hueOff) { return { x, y, prevX: x, prevY: y, path: [],
 
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
+  canvas.focus({ preventScroll: true });
   try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* capture is optional */ }
   const [x, y] = local(e);
   pointers.set(e.pointerId, newEmitter(x, y, pointers.size * 0.27));
@@ -884,6 +1263,14 @@ function addSeg(ax, ay, bx, by, dx, dy, distPx, col, amt, h) {
   segLen[i] = Math.hypot(bx - ax, by - ay);
 }
 
+// Volume mode keeps the emission colour in the palette's hot[3] → hot[0] band (Aurora: green ↔ lime),
+// so the head never drifts toward the aged colour and the hot/cool contrast stays strong.
+function emitHue(h) {
+  if (P.mode !== 'volume') return h;
+  const f = ((h % 1) + 1) % 1;
+  return 0.75 + 0.25 * (f < 0.5 ? f * 2 : 2 - f * 2);
+}
+
 function gather(dt, time) {
   segN = 0;
   const list = [...pointers.values()];
@@ -898,7 +1285,7 @@ function gather(dt, time) {
     for (let i = 1; i < n; i++) L += Math.hypot(pts[i * 2] - pts[i * 2 - 2], pts[i * 2 + 1] - pts[i * 2 - 1]);
     p.prevX = p.x; p.prevY = p.y;
 
-    const h = hue + p.hueOff;
+    const h = emitHue(hue + p.hueOff);
     const col = palColor(h);
     const amt = 0.2 * P.emission * fr;
 
@@ -1010,6 +1397,40 @@ function updateParticles(dt, time, frame) {
   head = (head + count) % N;
 }
 
+// Volume mode: the puff population reuses pUpdate (same advection + ring-buffer respawn) on its own state.
+// The ring cycles once per maximum puff life, so at Utsläpp ×1 puffs die before their slot is reused.
+const puffLife = () => [2.0 * P.life, 5.0 * P.life];
+const puffRate = () => (NPF / puffLife()[1]) * Math.min(P.emission, 1);
+const segEndPF = new Int32Array(SEG);
+function updatePuffs(dt, time, frame) {
+  let count = 0;
+  if (segN > 0) {
+    emitCarryPF += puffRate() * dt;
+    count = Math.min(Math.floor(emitCarryPF), NPF);
+    emitCarryPF -= count;
+    const brushPx = P.brush * cssH;
+    let total = 0;
+    for (let i = 0; i < segN; i++) total += segLen[i] + brushPx;
+    let acc = 0;
+    for (let i = 0; i < segN; i++) { acc += segLen[i] + brushPx; segEndPF[i] = Math.round((count * acc) / total); }
+    segEndPF[segN - 1] = count;
+  } else {
+    emitCarryPF = 0;
+  }
+
+  use(pr.pUpdate);
+  ut('uState', 0, pfstate.read); ut('uVel', 1, velocity.read);
+  uf('uVelTexel', velocity.tx, velocity.ty); uf('uDt', dt); uf('uTime', time); uf('uAspect', aspect);
+  uf('uSigma', P.brush * 0.55); uf('uHueSpread', 0.05);
+  uf('uNoiseAmp', 0.012 * P.turbulence); uf('uNoiseFreq', 4.0); uf('uNoiseSpeed', 1.5);
+  ui('uW', PFW); ui('uTotal', NPF); ui('uHead', headPF); ui('uCount', count); ui('uN', Math.max(segN, 1));
+  uarr('uA', 'uniform2fv', segA); uarr('uB', 'uniform2fv', segB);
+  uarr('uEnd', 'uniform1iv', segEndPF); uarr('uHue', 'uniform1fv', segHue);
+  if (cur.u.uFrame != null) gl.uniform1ui(cur.u.uFrame, (frame * 7919 + 104729) >>> 0);
+  draw(pfstate.write); pfstate.swap();
+  headPF = (headPF + count) % NPF;
+}
+
 /* ------------------------------------------------------------------ */
 /* Lighting state                                                     */
 /* ------------------------------------------------------------------ */
@@ -1080,6 +1501,11 @@ function render(frame) {
   uf('uLightCol', lc[0] * lp, lc[1] * lp, lc[2] * lp); uf('uLightPos', light.x, light.y);
   draw(scene);
 
+  postFX(frame);
+}
+
+// Shared by both modes: scene → bloom → tonemapped screen
+function postFX(frame) {
   // 5. Bloom: threshold → downsample chain → additive upsample
   const knee = 0.6, thr = 0.75;
   use(pr.bloomPre);
@@ -1099,6 +1525,112 @@ function render(frame) {
   draw(null);
 }
 
+/* Volume mode render: lit puff impostors                             */
+const VOL_DK = 0.3;     // raw puff density → saturated coverage for the shadow march
+const VOL_EMIS = 0.2;   // per-puff emission of brand-new smoke (stack luminance ≈ emission / opacity)
+function puffUniforms() {
+  const [pl0, pl1] = puffLife();
+  ut('uState', 0, pfstate.read);
+  ui('uW', PFW); ui('uTotal', NPF); ui('uOffset', headPF);
+  uf('uAspect', aspect); uf('uLifeMin', pl0); uf('uLifeMax', pl1);
+  uf('uHot0', P.coolTime * 0.4); uf('uHot1', P.coolTime * 1.45);
+  uf('uR0', P.brush * 1.2 * P.puffSize); uf('uGrow', 0.5);
+  const de = Math.max(1, P.emission);
+  uf('uDens0', 0.09 * de); uf('uDens1', 3.5 * de); uf('uEmis', VOL_EMIS); uf('uFade', 0.55);
+  uf('uFadeN', Math.max(1, puffRate() * 0.35));
+  uarr('uHot', 'uniform3fv', pal.hotFlat); uf('uAlb', ...pal.alb); uf('uTail', ...pal.tail);
+  ut('uVel', 3, velocity.read); uf('uVelTexel', velocity.tx, velocity.ty); uf('uStretch', 1.0);
+}
+
+function renderVolume(frame) {
+  const [lmin, lmax] = life();
+
+  // 1. Glassy wisps: the newest fine particles, additive into the particle buffer
+  gl.bindFramebuffer(gl.FRAMEBUFFER, accum.fbo);
+  gl.viewport(0, 0, accum.w, accum.h);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  if (P.showParticles && P.particles > 0) {
+    const wl1 = 1.0 * P.life;
+    const M = Math.min(N, Math.ceil((N / ((lmin + lmax) / 2)) * P.emission * wl1 * 1.2) + 256);
+    use(pr.wisps);
+    ut('uState', 0, pstate.read); ui('uW', PW); ui('uTotal', N); ui('uOffset', (((head - M) % N) + N) % N);
+    uf('uLifeMin', 0.45 * P.life); uf('uLifeMax', wl1);
+    uf('uWeight', P.particles * 0.3 * ((accum.w * accum.h) / 1.3e6) * (1048576 / N));
+    uarr('uHot', 'uniform3fv', pal.hotFlat);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+    gl.bindVertexArray(emptyVAO);
+    gl.drawArrays(gl.POINTS, 0, M);
+    gl.disable(gl.BLEND);
+  }
+
+  // 2. Puff density map (additive) → blurred: drives shadows, glow and occlusion
+  gl.bindFramebuffer(gl.FRAMEBUFFER, vDens.fbo);
+  gl.viewport(0, 0, vDens.w, vDens.h);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  use(pr.puffDens);
+  puffUniforms();
+  uf('uDW', 24576 / NPF);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
+  gl.bindVertexArray(emptyVAO);
+  gl.drawArrays(gl.TRIANGLES, 0, NPF * 6);
+  gl.disable(gl.BLEND);
+  use(pr.blur);
+  // blur width follows the puff layer scale so it stays the same on screen
+  ut('uSrc', 0, vDens); uf('uDir', vDens.tx * 1.5 * volScale, 0); draw(vTmp);
+  ut('uSrc', 0, vTmp); uf('uDir', 0, vDens.ty * 1.5 * volScale); draw(vBlur);
+
+  // 3. Glow field of the young, emissive smoke (light source for nearby puffs + halo)
+  use(pr.vGlowPre);
+  ut('uSrc', 0, vBlur); uf('uTexel', vBlur.tx, vBlur.ty); uf('uGain', 1.0); uf('uK', 0.6);
+  draw(vGlowA);
+  use(pr.blur);
+  for (const s of [1, 2, 3]) {
+    ut('uSrc', 0, vGlowA); uf('uDir', vGlowA.tx * s, 0); draw(vGlowB);
+    ut('uSrc', 0, vGlowB); uf('uDir', 0, vGlowA.ty * s); draw(vGlowA);
+  }
+
+  // 4. Light map: point light at the emitter/cursor, shadowed through the puff density
+  const lc = palColor(emitHue(hue));
+  const lp = light.level * P.light * 2.0;
+  use(pr.vLight);
+  ut('uDens', 0, vBlur);
+  uf('uLight', light.x, light.y); uf('uAbsorb', 4.5 * P.shadows); uf('uAspect', aspect);
+  uf('uFalloff', 9); uf('uFrameF', frame % 64); uf('uDK', VOL_DK);
+  uf('uLightCol', lc[0] * lp, lc[1] * lp, lc[2] * lp);
+  draw(vLit);
+
+  // 5. Shaded puffs at reduced resolution, oldest → newest, premultiplied "over"
+  gl.bindFramebuffer(gl.FRAMEBUFFER, vPuff.fbo);
+  gl.viewport(0, 0, vPuff.w, vPuff.h);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  use(pr.puffShade);
+  puffUniforms();
+  ut('uGlow', 1, vGlowA); uf('uGlowTexel', vGlowA.tx, vGlowA.ty);
+  ut('uLit', 2, vLit); ut('uNz', 5, nzT);
+  uf('uInvRes', 1 / vPuff.w, 1 / vPuff.h);
+  uf('uLight', light.x, light.y); uf('uLightZ', 0.12); uf('uLump', 0.6);
+  uf('uAmb', ...pal.amb); uf('uKeyC', ...pal.keyC);
+  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.bindVertexArray(emptyVAO);
+  gl.drawArrays(gl.TRIANGLES, 0, NPF * 6);
+  gl.disable(gl.BLEND);
+
+  // 6. Composite into the HDR scene, then the shared bloom + tonemap
+  use(pr.vComposite);
+  ut('uPuff', 0, vPuff); ut('uAcc', 1, accum); ut('uGlow', 2, vGlowA); ut('uDye', 3, dye.read); ut('uLit', 4, vLit);
+  uf('uAspect', aspect); uf('uAir', 0.02 * light.level * P.light);
+  uf('uWisp', 0.05); uf('uHalo', 0.35 * P.bloom); uf('uHaze', P.showSmoke ? P.smoke * 0.6 : 0);
+  uf('uBg0', ...pal.bg0); uf('uBg1', ...pal.bg1);
+  uf('uLightCol', lc[0] * lp, lc[1] * lp, lc[2] * lp); uf('uLightPos', light.x, light.y);
+  uf('uTail', ...pal.tail); uf('uAmb', ...pal.amb);
+  draw(scene);
+
+  postFX(frame);
+}
+
 function clearAll() {
   for (const d of [velocity, dye, pressure]) {
     for (const f of [d.read, d.write]) {
@@ -1108,34 +1640,49 @@ function clearAll() {
   }
   initParticles();
   emitCarry = 0;
+  initPuffs();
 }
 
 /* ------------------------------------------------------------------ */
 /* Loop                                                               */
 /* ------------------------------------------------------------------ */
 let last = performance.now(), time = 0, frame = 0, fpsEMA = 60, hudT = 0;
-function loop(now) {
-  const dt = Math.min(Math.max((now - last) / 1000, 0.001), 1 / 30);
-  last = now;
+function tick(dt) {
   resize(false);
   if (!P.paused) { time += dt; updateDemo(dt); }
   const emitters = gather(dt, time);
   updateLight(dt, emitters);
+  const vol = volReady();
   if (!P.paused) {
     if (segN) { hue += dt * 0.035; splat(); }
     step(dt, time);
     updateParticles(dt, time, frame);
+    if (pfstate) updatePuffs(dt, time, frame);
   } else {
     segN = 0;
   }
-  render(frame);
-
+  if (vol) renderVolume(frame);
+  else render(frame);
+  frame++;
+}
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min(Math.max((now - last) / 1000, 0.001), 1 / 30);
+  last = now;
+  tick(dt);
   fpsEMA += (1 / Math.max((now - (loop.prev || now - 16.7)) / 1000, 1e-3) - fpsEMA) * 0.05;
   loop.prev = now;
   if ((hudT += dt) > 0.5) { hudT = 0; $('hudFps').textContent = Math.round(fpsEMA); }
-  frame++;
-  requestAnimationFrame(loop);
 }
+// Test hook: advance the simulation a fixed number of frames synchronously, independent of
+// requestAnimationFrame throttling. krakatoaDebug.run(240) = 4 s of autopilot at 60 fps.
+// krakatoaDebug.setMode('particles' | 'volume') switches mode like the panel does.
+window.krakatoaDebug = {
+  P,
+  run(frames = 240, dt = 1 / 60) { for (let i = 0; i < frames; i++) tick(dt); return frame; },
+  setMode: (m) => setMode(m),
+  get volumeOK() { return volOK; },
+};
 
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('Grafikkontexten tappades. Ladda om sidan för att starta igen.'); });
 
@@ -1179,8 +1726,26 @@ for (const [k, q] of Object.entries(QUALITY)) {
 qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
-  buildSim(); buildParticles(); buildScreen();
+  buildSim(); buildParticles(); buildPuffs(); buildScreen(); buildVolume();
 });
+
+// Läge: Partiklar (fine additive particle smoke) / Volym (lit puff impostors)
+const MODES = [['particles', 'mode-particles'], ['volume', 'mode-volume']];
+function setMode(m) {
+  if (m !== 'volume' || !volOK) m = 'particles';
+  const changed = m !== P.mode;
+  P.mode = m;
+  try { localStorage.setItem('krakatoa.mode', m); } catch (_) { /* storage is optional */ }
+  const vol = m === 'volume';
+  for (const [val, id] of MODES) $(id).setAttribute('aria-pressed', String(m === val));
+  $('g-volume').hidden = !vol;
+  $('hudPuffSep').hidden = !vol;
+  $('hudPuffBox').hidden = !vol;
+  if (vol) { if (changed || !vPuff) buildVolume(); }
+  else if (changed) freeVolume();
+}
+for (const [val, id] of MODES) $(id).addEventListener('click', () => setMode(val));
+if (!volOK) { $('mode-volume').disabled = true; $('mode-volume').title = 'Volymläget stöds inte av den här grafikdrivern'; }
 
 for (const [group, defs] of Object.entries(SLIDERS)) {
   const g = $(group);
@@ -1195,7 +1760,10 @@ for (const [group, defs] of Object.entries(SLIDERS)) {
       input.style.setProperty('--fill', ((P[key] - min) / (max - min)) * 100 + '%');
     };
     input.value = P[key];
-    input.addEventListener('input', () => { P[key] = parseFloat(input.value); sync(); });
+    input.addEventListener('input', () => {
+      P[key] = parseFloat(input.value); sync();
+      if ((key === 'brush' || key === 'puffSize') && P.mode === 'volume') buildVolume();
+    });
     sync();
     g.appendChild(row);
   }
@@ -1222,18 +1790,31 @@ pauseBtn.addEventListener('click', togglePause);
 $('btnClear').addEventListener('click', clearAll);
 
 window.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.target.closest && e.target.closest('input, select, textarea, button')) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+  // Focused controls keep Space/Enter and their own keys; the letter and digit shortcuts still apply
+  const ctl = e.target.closest && e.target.closest('input, select, textarea, button');
+  if (ctl && (e.code === 'Space' || e.key === 'Enter' || !/^[mhca1-5]$/i.test(e.key))) return;
+  if (ctl && ctl.tagName === 'SELECT') e.preventDefault(); // stop type-ahead, e.g. M selecting "Medel"
   if (e.code === 'Space') { e.preventDefault(); togglePause(); }
   else if (e.key === 'c' || e.key === 'C') clearAll();
   else if (e.key === 'h' || e.key === 'H') setPanel(panel.hidden);
   else if (e.key === 'a' || e.key === 'A') setToggle('auto', !P.auto);
+  else if (e.key === 'm' || e.key === 'M') setMode(P.mode === 'volume' ? 'particles' : 'volume');
   else if (/^[1-5]$/.test(e.key)) setPalette(+e.key - 1);
 });
 
 /* ------------------------------------------------------------------ */
 setPalette(P.palette);
 resize(true);
+let startMode = P.mode;
+try { const m = localStorage.getItem('krakatoa.mode'); if (m === 'volume' || m === 'particles') startMode = m; } catch (_) { /* storage is optional */ }
+if (/^#volym$/i.test(location.hash)) startMode = 'volume';
+else if (/^#partiklar$/i.test(location.hash)) startMode = 'particles';
+setMode(startMode);
+window.addEventListener('hashchange', () => {
+  if (/^#volym$/i.test(location.hash)) setMode('volume');
+  else if (/^#partiklar$/i.test(location.hash)) setMode('particles');
+});
 requestAnimationFrame((t) => { last = t; loop(t); });
 })();
 </script>
