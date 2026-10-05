@@ -224,7 +224,7 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
   </aside>
 </div>
 
-<div class="hud" id="hud"><span><b id="hudParticles">–</b> partiklar</span><span>·</span><span>grid <b id="hudGrid">–</b></span><span>·</span><span><b id="hudFps">–</b> fps</span><span id="hudPuffSep" hidden>·</span><span id="hudPuffBox" hidden><b id="hudPuffs">–</b> rökpuffar</span></div>
+<div class="hud" id="hud"><span id="hudPartBox"><b id="hudParticles">–</b> partiklar</span><span id="hudPartSep">·</span><span>grid <b id="hudGrid">–</b></span><span>·</span><span><b id="hudFps">–</b> fps</span></div>
 <div class="hint" id="hint">Håll nere musknappen och dra</div>
 <div class="fail" id="fail" hidden><div><h1>Rökfältet kunde inte starta</h1><p></p></div></div>
 
@@ -254,27 +254,28 @@ const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
 // sim: velocity grid (short side), dye: smoke field (short side), pw×ph: particle state texture, accum: particle buffer vs CSS px
-// Volume mode only: fw×fh: puff state texture, puff: puff buffer vs CSS px, vl: puff light/shadow map (short side)
+// Volume mode only: g: 3D grid cells on the short screen side, gz: grid depth vs g, jac: pressure (Jacobi) iterations,
+// rm: ray-march buffer vs CSS px
 const QUALITY = {
-  low:    { label: 'Låg',   sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, fw: 96,  fh: 64,  puff: 0.35, vl: 160 },
-  medium: { label: 'Medel', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, fw: 128, fh: 96,  puff: 0.42, vl: 192 },
-  high:   { label: 'Hög',   sim: 160, dye: 1024, pw: 2048, ph: 1024, accum: 1.0, fw: 192, fh: 128, puff: 0.6,  vl: 224 },
-  ultra:  { label: 'Ultra', sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0, fw: 256, fh: 160, puff: 0.75, vl: 256 },
+  low:    { label: 'Låg',   sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, g: 56,  gz: 0.67, jac: 16, rm: 0.5 },
+  medium: { label: 'Medel', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, g: 76,  gz: 0.67, jac: 20, rm: 0.6 },
+  high:   { label: 'Hög',   sim: 160, dye: 1024, pw: 2048, ph: 1024, accum: 1.0, g: 112, gz: 0.67, jac: 28, rm: 0.75 },
+  ultra:  { label: 'Ultra', sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0, g: 128, gz: 0.67, jac: 30, rm: 0.9 },
 };
 
 // hot = colour at emission (cycles while you draw), cool = colour the smoke ages into
-// tail = colour of the far, oldest smoke (volume mode only)
+// Volume mode only: ember = glow of cooling smoke, smoke = albedo of cooled smoke, tail = albedo of the oldest smoke
 const PALETTES = [
-  { name: 'Aurora',   hot: ['#d6ff3c', '#4dffa0', '#24e4ff', '#9cff4a'], cool: '#1a3bff', key: '#2c4cff', bg: ['#010207', '#041026'], tail: '#4b2bff' },
-  { name: 'Nebula',   hot: ['#ff2fa2', '#ff4d6d', '#c43cff', '#ff6fd6'], cool: '#1c88ff', key: '#5a2cff', bg: ['#030107', '#14062e'], tail: '#4a2ad8' },
-  { name: 'Magma',    hot: ['#fff09a', '#ffb03c', '#ff651c', '#ffd25a'], cool: '#7c0e1e', key: '#ff4a24', bg: ['#040202', '#1a0605'], tail: '#5a0a2a' },
-  { name: 'Spektrum', hot: ['#ff3b5c', '#ffd33b', '#3bffb2', '#3b8cff'], cool: '#4a1fb0', key: '#5b3cff', bg: ['#030308', '#0c0a22'], tail: '#3a1a9a' },
-  { name: 'Aska',     hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'], tail: '#3a4050' },
+  { name: 'Aurora',   hot: ['#d6ff3c', '#4dffa0', '#24e4ff', '#9cff4a'], cool: '#1a3bff', key: '#2c4cff', bg: ['#010207', '#041026'], ember: '#7aff30', smoke: '#2f5cff', tail: '#2a30e0' },
+  { name: 'Nebula',   hot: ['#ff2fa2', '#ff4d6d', '#c43cff', '#ff6fd6'], cool: '#1c88ff', key: '#5a2cff', bg: ['#030107', '#14062e'], ember: '#b03cff', smoke: '#3a8cff', tail: '#3a28b8' },
+  { name: 'Magma',    hot: ['#fff09a', '#ffb03c', '#ff651c', '#ffd25a'], cool: '#7c0e1e', key: '#ff4a24', bg: ['#040202', '#1a0605'], ember: '#ff4810', smoke: '#8a8d94', tail: '#36373c' },
+  { name: 'Spektrum', hot: ['#ff3b5c', '#ffd33b', '#3bffb2', '#3b8cff'], cool: '#4a1fb0', key: '#5b3cff', bg: ['#030308', '#0c0a22'], ember: '#ff3bd0', smoke: '#7050e0', tail: '#30188a' },
+  { name: 'Aska',     hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'], ember: '#ff7a2c', smoke: '#a4acbc', tail: '#464b58' },
 ];
 
 const P = {
-  mode: 'particles', // 'particles' = fine additive particle smoke, 'volume' = lit puff impostors
-  coolTime: 0.6, puffSize: 1.0,
+  mode: 'particles', // 'particles' = fine additive particle smoke, 'volume' = ray-marched 3D smoke solver
+  coolTime: 0.5, lift: 1.0,
   quality: coarse ? 'medium' : 'high',
   palette: 0,
   brush: 0.03, emission: 1.0, force: 1.0,
@@ -304,8 +305,8 @@ const SLIDERS = {
     ['bloom', 'Glöd', 0, 2, 0.05, (v) => v.toFixed(2)],
   ],
   'g-volume': [
-    ['coolTime', 'Avsvalning', 0.2, 2, 0.05, (v) => v.toFixed(2).replace('.', ',') + ' s'],
-    ['puffSize', 'Puffstorlek', 0.5, 2, 0.05, (v) => '×' + v.toFixed(2)],
+    ['coolTime', 'Avsvalning', 0.15, 2, 0.05, (v) => v.toFixed(2).replace('.', ',') + ' s'],
+    ['lift', 'Lyftkraft', 0, 3, 0.05, (v) => '×' + v.toFixed(2)],
   ],
 };
 
@@ -635,269 +636,326 @@ void main() {
 }`;
 
 /* ------------------------------------------------------------------ */
-/* Volume mode shaders ("lit puff impostors")                         */
+/* Volume mode shaders: 3D smoke solver + volumetric ray march         */
 /* ------------------------------------------------------------------ */
-// Fullscreen passes for volume mode. Kept apart from FS so a compile failure here only
-// disables volume mode instead of the whole page.
+// Kept apart from FS so a compile failure here only disables volume mode instead of the whole page.
+// Every 3D field lives in a "flat 3D texture": a 2D atlas whose tiles are the Z slices (uCols tiles per row),
+// so each solver pass is one fullscreen draw over the atlas. Neighbours are texelFetch'ed; semi-Lagrangian
+// lookups take two hardware-bilinear taps in adjacent slices, clamped half a texel inside the tile so tiles
+// never bleed into each other. Solver units: grid cells and seconds.
+const V_ATLAS = `
+uniform ivec3 uG;
+uniform int uCols;
+uniform vec2 uAtl;
+ivec2 texOf(ivec3 c) { return ivec2(c.z % uCols, c.z / uCols) * uG.xy + c.xy; }
+// fragment → cell; false on the unused tiles at the end of the atlas
+bool cell(out ivec3 c) {
+  ivec2 f = ivec2(gl_FragCoord.xy), t = f / uG.xy;
+  c = ivec3(f - t * uG.xy, t.y * uCols + t.x);
+  return c.z < uG.z;
+}
+// neighbour fetch clamped to the grid (zero gradient: open boundary)
+vec4 F(sampler2D s, ivec3 c) { return texelFetch(s, texOf(clamp(c, ivec3(0), uG - 1)), 0); }
+// Pressure and divergence are packed 4 cells along x per RGBA texel (grid uGp = X/4, Y, Z, same tile order),
+// so a Jacobi iteration updates 4 cells with 7 fetches. p = 0 outside the grid (open boundary).
+uniform ivec3 uGp;
+ivec2 ptexOf(ivec3 c) { return ivec2(c.z % uCols, c.z / uCols) * uGp.xy + c.xy; }
+bool pcell(out ivec3 c) {
+  ivec2 f = ivec2(gl_FragCoord.xy), t = f / uGp.xy;
+  c = ivec3(f - t * uGp.xy, t.y * uCols + t.x);
+  return c.z < uGp.z;
+}
+vec4 PP(sampler2D s, ivec3 c) {
+  return (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uGp))) ? vec4(0.0) : texelFetch(s, ptexOf(c), 0);
+}
+float P0(sampler2D s, ivec3 c) {
+  return (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uG))) ? 0.0 : texelFetch(s, ptexOf(ivec3(c.x >> 2, c.yz)), 0)[c.x & 3];
+}
+// trilinear lookup at p (cell units, centres at +0.5) in an atlas of grid G with cols tiles per row
+vec4 Sx(sampler2D s, vec3 p, ivec3 G, int cols, vec2 atl) {
+  p = clamp(p, vec3(0.5), vec3(G) - 0.5);
+  float zf = p.z - 0.5, z0 = floor(zf);
+  int k0 = int(z0), k1 = min(k0 + 1, G.z - 1);
+  vec2 a = vec2(ivec2(k0 % cols, k0 / cols) * G.xy) + p.xy;
+  vec2 b = vec2(ivec2(k1 % cols, k1 / cols) * G.xy) + p.xy;
+  return mix(texture(s, a * atl), texture(s, b * atl), zf - z0);
+}
+vec4 S(sampler2D s, vec3 p) { return Sx(s, p, uG, uCols, uAtl); }
+`;
+
+// Soft spherical emitters swept along this frame's stroke segments (capsules on the mid plane)
+const V_BRUSH = `
+uniform int uN;
+uniform vec3 uEA[16];
+uniform vec3 uEB[16];
+uniform float uRad2;
+float brush(vec3 p, out vec3 rel, out int bi) {
+  float best = 0.0; rel = vec3(0.0, 1.0, 0.0); bi = 0;
+  for (int i = 0; i < 16; i++) {
+    if (i >= uN) break;
+    vec3 a = uEA[i], ba = uEB[i] - a, pa = p - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    vec3 d = pa - ba * h;
+    float g = exp(-dot(d, d) / uRad2);
+    if (g > best) { best = g; rel = d; bi = i; }
+  }
+  return best;
+}
+`;
+
+// Value noise for the emitters (only evaluated inside a brush)
+const V_NOISE = `
+float hash3(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float vnoise(vec3 p) {
+  vec3 i = floor(p), f = p - i;
+  f = f * f * (3.0 - 2.0 * f);
+  vec2 e = vec2(1.0, 0.0);
+  return mix(mix(mix(hash3(i), hash3(i + e.xyy), f.x), mix(hash3(i + e.yxy), hash3(i + e.xxy), f.x), f.y),
+             mix(mix(hash3(i + e.yyx), hash3(i + e.xyx), f.x), mix(hash3(i + e.yxx), hash3(i + e.xxx), f.x), f.y), f.z);
+}
+`;
+
 const VFS = {
-  // Shadow/light map: march from each texel toward the point light through the puffs' own
-  // (saturated) density. rgb = incoming light colour (falloff × transmittance), a = transmittance.
-  vLight: COMMON + `uniform sampler2D uDens; uniform vec2 uLight;
-uniform float uAbsorb, uAspect, uFalloff, uFrameF, uDK; uniform vec3 uLightCol;
-float D(vec2 p) { return 1.0 - exp(-texture(uDens, p).a * uDK); }
+  // Scalars (x: density, y: temperature, z: freshness), MacCormack step 1: semi-Lagrangian advection (RK2
+  // backtrace) by last step's divergence-free velocity
+  advS: V_ATLAS + `uniform sampler2D uVel, uSrc; uniform float uDt;
 void main() {
-  vec2 toL = uLight - vUv;
-  float dist = length(toL * vec2(uAspect, 1.0));
-  float jit = ign(gl_FragCoord.xy + uFrameF * 5.588238);
-  float sum = 0.0;
-  const int STEPS = 24;
-  for (int i = 0; i < STEPS; i++) sum += D(vUv + toL * ((float(i) + jit) / float(STEPS)));
-  float T = exp(-sum / float(STEPS) * dist * uAbsorb);
-  float fall = 1.0 / (1.0 + dist * dist * uFalloff);
-  o = vec4(uLightCol * fall * T, T);
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  vec3 p = vec3(c) + 0.5;
+  vec3 v = S(uVel, p - 0.5 * uDt * F(uVel, c).xyz).xyz;
+  o = S(uSrc, p - uDt * v);
 }`,
 
-  // Downsample the puff density map into a glow source: hue of the young smoke's emission with a saturating
-  // magnitude. a keeps the raw density so the blurred result doubles as a wide occlusion/isolation term.
-  vGlowPre: `uniform sampler2D uSrc; uniform vec2 uTexel; uniform float uGain, uK;
+  // MacCormack step 2: trace the result forward again, correct by half the round-trip error, clamp to the
+  // source cell's neighbourhood (keeps it stable). Then decay, and the emitters: noisy density is added,
+  // temperature and freshness are set to the brush profile.
+  advS2: V_ATLAS + V_BRUSH + V_NOISE + `uniform sampler2D uVel, uSrc, uHat; uniform float uDt, uDRate, uDMax, uTRate, uTime; uniform vec3 uDecay;
 void main() {
-  vec2 t = uTexel;
-  vec4 s = (texture(uSrc, vUv + vec2(-t.x, -t.y)) + texture(uSrc, vUv + vec2(t.x, -t.y))
-          + texture(uSrc, vUv + vec2(-t.x, t.y)) + texture(uSrc, vUv + vec2(t.x, t.y))) * 0.25;
-  float le = max(s.r, max(s.g, s.b));
-  o = vec4(s.rgb / (le + 1e-4) * (1.0 - exp(-le * uK)) * uGain, s.a);
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  vec3 p = vec3(c) + 0.5;
+  vec3 v = S(uVel, p - 0.5 * uDt * F(uVel, c).xyz).xyz;
+  ivec3 i0 = ivec3(floor(clamp(p - uDt * v, vec3(0.5), vec3(uG) - 0.5) - 0.5));
+  vec4 lo = F(uSrc, i0), hi = lo;
+  for (int k = 1; k < 8; k++) {
+    vec4 q = F(uSrc, i0 + ivec3(k & 1, (k >> 1) & 1, k >> 2));
+    lo = min(lo, q); hi = max(hi, q);
+  }
+  vec4 hat = texelFetch(uHat, texOf(c), 0);
+  vec4 s = clamp(hat + 0.5 * (texelFetch(uSrc, texOf(c), 0) - S(uHat, p + uDt * v)), lo, hi);
+  s.xyz *= uDecay;
+  vec3 rel; int bi;
+  float w = brush(p, rel, bi);
+  if (w > 1e-3) {
+    // heat builds up while the gas passes the emitter, so the hot core is shaped by the flow (a flame, not a ball)
+    float n = vnoise(p * 0.22 + vec3(0.0, -uTime * 2.5, uTime * 0.8));
+    s.x = min(s.x + uDRate * uDt * w * (0.25 + 1.5 * n * n), uDMax);
+    s.y = min(s.y + uTRate * uDt * w * (0.4 + 1.2 * n), 1.2);
+    s.z = max(s.z, w);
+  }
+  o = s;
 }`,
 
-  // Background, faint lit haze from the dye field, the premultiplied puff layer, emissive wisps and the glow halo
-  vComposite: `uniform sampler2D uPuff, uAcc, uGlow, uDye, uLit;
-uniform float uAspect, uAir, uWisp, uHalo, uHaze;
-uniform vec3 uBg0, uBg1, uLightCol, uTail, uAmb;
-uniform vec2 uLightPos;
+  advV: V_ATLAS + `uniform sampler2D uVel; uniform float uDt, uDamp;
+void main() {
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  vec3 p = vec3(c) + 0.5;
+  o = vec4(S(uVel, p - uDt * F(uVel, c).xyz).xyz * uDamp, 0.0);
+}`,
+
+  // xyz: vorticity (curl of velocity), w: its magnitude
+  curl: V_ATLAS + `uniform sampler2D uVel;
+void main() {
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  vec3 L = F(uVel, c - ivec3(1, 0, 0)).xyz, R = F(uVel, c + ivec3(1, 0, 0)).xyz;
+  vec3 B = F(uVel, c - ivec3(0, 1, 0)).xyz, T = F(uVel, c + ivec3(0, 1, 0)).xyz;
+  vec3 K = F(uVel, c - ivec3(0, 0, 1)).xyz, N = F(uVel, c + ivec3(0, 0, 1)).xyz;
+  vec3 w = 0.5 * vec3(T.z - B.z - N.y + K.y, N.x - K.x - R.z + L.z, R.y - L.y - T.x + B.x);
+  o = vec4(w, length(w));
+}`,
+
+  // Vorticity confinement, buoyancy (hot gas rises; fresh smoke keeps a little lift), ABC-flow turbulence where
+  // there is smoke, and the emitters: a pull toward the pointer velocity plus a gentle outward push.
+  force: V_ATLAS + V_BRUSH + `uniform sampler2D uVel, uCurl, uScal;
+uniform float uDt, uEps, uBuoy, uTurb, uTF, uTime, uKin, uPush;
+uniform vec3 uEV[16];
+void main() {
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  vec3 v = F(uVel, c).xyz;
+  vec3 w = F(uCurl, c).xyz;
+  vec3 g = vec3(F(uCurl, c + ivec3(1, 0, 0)).w - F(uCurl, c - ivec3(1, 0, 0)).w,
+                F(uCurl, c + ivec3(0, 1, 0)).w - F(uCurl, c - ivec3(0, 1, 0)).w,
+                F(uCurl, c + ivec3(0, 0, 1)).w - F(uCurl, c - ivec3(0, 0, 1)).w);
+  vec4 s = F(uScal, c);
+  // confinement only where there is smoke, so empty air cannot feed back on itself
+  vec3 f = uEps * min(s.x * 4.0, 1.0) * cross(g / (length(g) + 1e-4), w);
+  
+  f.y += uBuoy * (s.y + 0.45 * s.z);
+  vec3 p = vec3(c) + 0.5;
+  vec3 q = p * uTF, t = uTime * vec3(0.53, 0.71, 0.37);
+  vec3 r = mat3(0.36, 0.48, -0.8, -0.8, 0.6, 0.0, 0.48, 0.64, 0.6) * q * 2.3 + 4.1;
+  vec3 abc = vec3(sin(q.z + t.x) + cos(q.y + t.y), sin(q.x + t.y) + cos(q.z + t.z), sin(q.y + t.z) + cos(q.x + t.x))
+           + 0.5 * vec3(sin(r.z - t.y) + cos(r.y + t.z), sin(r.x - t.z) + cos(r.z + t.x), sin(r.y - t.x) + cos(r.x + t.y));
+  f += uTurb * abc * min(s.x, 1.0);
+  v += uDt * f;
+  vec3 rel; int bi;
+  float b = brush(p, rel, bi);
+  if (b > 1e-3) {
+    vec3 ve = uEV[bi];
+    float sp = length(ve);
+    if (sp > 1e-3) { vec3 dir = ve / sp; v += dir * (max(sp - dot(v, dir), 0.0) * min(b * uKin, 1.0)); }
+    v += rel / (length(rel) + 0.5) * (uPush * b * uDt);
+  }
+  o = vec4(v, 0.0);
+}`,
+
+  // Divergence of 4 consecutive cells (packed layout)
+  div: V_ATLAS + `uniform sampler2D uVel;
+void main() {
+  ivec3 c; if (!pcell(c)) { o = vec4(0.0); return; }
+  ivec3 b = ivec3(c.x * 4, c.yz);
+  float u[6];
+  for (int i = 0; i < 6; i++) u[i] = F(uVel, b + ivec3(i - 1, 0, 0)).x;
+  vec4 d;
+  for (int i = 0; i < 4; i++) {
+    ivec3 q = b + ivec3(i, 0, 0);
+    d[i] = 0.5 * (u[i + 2] - u[i] + F(uVel, q + ivec3(0, 1, 0)).y - F(uVel, q - ivec3(0, 1, 0)).y
+                                  + F(uVel, q + ivec3(0, 0, 1)).z - F(uVel, q - ivec3(0, 0, 1)).z);
+  }
+  o = d;
+}`,
+
+  // One Jacobi iteration of lap(p) = div for 4 cells; uMul < 1 on the first iteration damps the warm start
+  jacobi: V_ATLAS + `uniform sampler2D uP, uDiv; uniform float uMul;
+void main() {
+  ivec3 c; if (!pcell(c)) { o = vec4(0.0); return; }
+  vec4 C = PP(uP, c);
+  vec4 s = vec4(PP(uP, c - ivec3(1, 0, 0)).w, C.xyz) + vec4(C.yzw, PP(uP, c + ivec3(1, 0, 0)).x)
+         + PP(uP, c - ivec3(0, 1, 0)) + PP(uP, c + ivec3(0, 1, 0)) + PP(uP, c - ivec3(0, 0, 1)) + PP(uP, c + ivec3(0, 0, 1));
+  o = (s * uMul - texelFetch(uDiv, ptexOf(c), 0)) / 6.0;
+}`,
+
+  grad: V_ATLAS + `uniform sampler2D uP, uVel;
+void main() {
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  vec3 g = 0.5 * vec3(P0(uP, c + ivec3(1, 0, 0)) - P0(uP, c - ivec3(1, 0, 0)),
+                      P0(uP, c + ivec3(0, 1, 0)) - P0(uP, c - ivec3(0, 1, 0)),
+                      P0(uP, c + ivec3(0, 0, 1)) - P0(uP, c - ivec3(0, 0, 1)));
+  o = vec4(F(uVel, c).xyz - g, 0.0);
+}`,
+
+  // Resize / quality change: resample an old atlas (grid uGo, uColso tiles per row) into the current grid
+  resample: V_ATLAS + `uniform sampler2D uSrc; uniform ivec3 uGo; uniform int uColso; uniform vec2 uAtlo; uniform vec4 uMul;
+void main() {
+  ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
+  o = Sx(uSrc, (vec3(c) + 0.5) / vec3(uG) * vec3(uGo), uGo, uColso, uAtlo) * uMul;
+}`,
+
+  // Ray march through the box: fixed camera on +z with mild perspective, the mid plane z = 0 exactly fills the
+  // screen. Beer–Lambert absorption, single scattering of the light volume (+ ambient for multiple scattering),
+  // emission from temperature, jittered start. rgb: premultiplied radiance, a: opacity.
+  march: COMMON + `precision highp sampler3D;
+uniform sampler3D uDen, uLit;
+uniform vec3 uBox, uHot, uEmb, uAlb, uTail, uAmb, uKcol;
+uniform float uCam, uAspect, uExt, uStep, uFrameF, uEmis;
+void main() {
+  vec3 ro = vec3(0.0, 0.0, uCam);
+  vec3 rd = normalize(vec3((vUv.x - 0.5) * uAspect, vUv.y - 0.5, -uCam));
+  rd += 1e-6 * step(abs(rd), vec3(1e-7));
+  vec3 ta = (-uBox - ro) / rd, tb = (uBox - ro) / rd;
+  vec3 t0 = min(ta, tb), t1 = max(ta, tb);
+  float tn = max(max(t0.x, t0.y), t0.z), tf = min(min(t1.x, t1.y), t1.z);
+  vec3 col = vec3(0.0);
+  float T = 1.0;
+  if (tf > tn) {
+    vec3 inv = 0.5 / uBox;
+    float t = tn + uStep * ign(gl_FragCoord.xy + uFrameF * 5.588238);
+    for (int i = 0; i < 400; i++) {
+      if (t >= tf) break;
+      vec3 u = (ro + rd * t) * inv + 0.5;
+      vec4 s = texture(uDen, u);
+      if (s.x > 1e-3) {
+        vec3 e = min(u, 1.0 - u) * uBox;
+        float hot = smoothstep(0.1, 0.9, s.y);
+        // hot gas is thin and glowing; thin haze fades out faster than dense smoke (crisper wisps); fade at the box faces
+        float d = s.x * (1.0 - 0.55 * hot) * smoothstep(0.0, 0.3, s.x) * smoothstep(0.0, 0.04, min(min(e.x, e.y), e.z));
+        float a = 1.0 - exp(-d * uExt * uStep);
+        vec4 L = texture(uLit, u);
+        vec3 alb = mix(uTail, uAlb, s.z) * (1.0 - 0.75 * hot);
+        // key light (single scattering) reads a little paler than the deep, saturated ambient/glow-lit smoke
+        vec3 key = uKcol * L.a;
+        vec3 albK = mix(alb, vec3(max(alb.r, max(alb.g, alb.b))), 0.12);
+        vec3 em = mix(uEmb, uHot, smoothstep(0.7, 1.15, s.y)) * (uEmis * hot * hot);
+        col += T * a * (albK * key + alb * (L.rgb - key + uAmb * (0.35 + 0.65 * L.a)) + em);
+        T *= 1.0 - a;
+        if (T < 0.01) break;
+      }
+      t += uStep;
+    }
+  }
+  o = vec4(col, 1.0 - T);
+}`,
+
+  // Background + upsampled ray-march layer into the HDR scene (then the shared bloom + tonemap)
+  comp: `uniform sampler2D uMarch; uniform vec2 uMTexel; uniform float uAspect, uAir; uniform vec3 uBg0, uBg1, uLightCol; uniform vec2 uLightPos;
 void main() {
   vec2 q = (vUv - vec2(0.5, 0.42)) * vec2(uAspect, 1.0);
   vec3 bg = mix(uBg1, uBg0, smoothstep(0.0, 1.0, length(q)));
   vec2 dl = (vUv - uLightPos) * vec2(uAspect, 1.0);
   bg += uLightCol * uAir / (1.0 + dot(dl, dl) * 30.0);
-  vec3 G = texture(uGlow, vUv).rgb;
-  float hz = (1.0 - exp(-texture(uDye, vUv).a * uHaze)) * 0.7;
-  vec3 col = mix(bg, uTail * (uAmb + texture(uLit, vUv).rgb * 0.5 + G * 0.6), hz);
-  vec4 pf = texture(uPuff, vUv);
-  col = pf.rgb + col * (1.0 - pf.a);
-  col += texture(uAcc, vUv).rgb * uWisp + G * uHalo;
-  o = vec4(col, 1.0);
+  // 4 bilinear taps = a soft 3×3 tent in march texels: upsamples and hides the jittered-start noise
+  vec2 t = uMTexel * 0.75;
+  vec4 m = 0.25 * (texture(uMarch, vUv + vec2(-t.x, -t.y)) + texture(uMarch, vUv + vec2(t.x, -t.y))
+                 + texture(uMarch, vUv + vec2(-t.x, t.y)) + texture(uMarch, vUv + vec2(t.x, t.y)));
+  o = vec4(m.rgb + bg * (1.0 - m.a), 1.0);
 }`,
 };
 
-// One puff = one camera-facing quad (6 vertices, no attributes). Drawn in ring order starting at the
-// oldest puff (uOffset = head), so with "over" blending the newest, hottest smoke ends up on top.
-// The SHADE variant also reads the glow field at the puff centre (colour, gradient = direction to the glow).
-function vsPuff(shade) {
+// Passes that write MRT layers of a TEXTURE_3D (no gl_Layer in WebGL2): each draw attaches V_MRT consecutive
+// layers starting at uL0, and at(k) computes layer k at this fragment.
+const V_MRT = 4;
+function fsLayers(body) {
+  let outs = '', calls = '';
+  for (let j = 0; j < V_MRT; j++) { outs += `layout(location = ${j}) out vec4 o${j};\n`; calls += `  o${j} = at(uL0 + ${j});\n`; }
   return `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
-uniform sampler2D uState;
-uniform sampler2D uGlow;
-uniform sampler2D uVel;
-uniform int uW, uTotal, uOffset;
-uniform float uAspect, uLifeMin, uLifeMax, uHot0, uHot1, uR0, uGrow, uDens0, uDens1, uEmis, uFade, uFadeN, uStretch;
-uniform vec3 uHot[4];
-uniform vec3 uAlb, uTail;
-uniform vec2 uGlowTexel, uVelTexel;
-out vec3 vHot; out vec3 vAlb; out vec4 vP; out vec2 vQ; out vec3 vG; out vec4 vGd; out vec2 vRot; out vec3 vBody; out vec3 vSAlb;
-${COMMON}
-const bool SHADE = ${shade ? 'true' : 'false'};
-const vec2 CORNER[6] = vec2[6](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0), vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0));
-float mx(vec3 c) { return max(c.r, max(c.g, c.b)); }
-float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
-vec3 pal(float t) {
-  t = fract(t) * 4.0; int i = int(t);
-  return mix(uHot[i], uHot[(i + 1) & 3], smoothstep(0.0, 1.0, fract(t)));
-}
+precision highp sampler3D;
+${outs}uniform int uL0;
+${body}
 void main() {
-  int pi = gl_VertexID / 6;
-  int c = gl_VertexID - pi * 6;
-  int id = (pi + uOffset) % uTotal;
-  vec4 s = texelFetch(uState, ivec2(id % uW, id / uW), 0);
-  uint h = pcg(uint(id) * 2654435761u + 0x85EBCA6Bu);
-  float r1 = float(h & 1023u) * (1.0 / 1023.0);
-  float r2 = float((h >> 10u) & 1023u) * (1.0 / 1023.0);
-  float r3 = float(h >> 20u) * (1.0 / 4095.0);
-  float age = s.z;
-  float k = age / mix(uLifeMin, uLifeMax, r1);
-  if (k >= 1.0) {
-    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    vHot = vec3(0.0); vAlb = vec3(0.0); vP = vec4(0.0); vQ = vec2(0.0); vG = vec3(0.0); vGd = vec4(0.0); vRot = vec2(1.0, 0.0);
-    vBody = vec3(0.0); vSAlb = vec3(0.0);
-    return;
+${calls}}`;
+}
+// Scalar atlas → TEXTURE_3D (hardware trilinear for the light pass and the ray march)
+const V_TO3D = `uniform sampler2D uSrc; uniform ivec3 uG; uniform int uCols;
+vec4 at(int k) { k = min(k, uG.z - 1); return texelFetch(uSrc, ivec2(k % uCols, k / uCols) * uG.xy + ivec2(gl_FragCoord.xy), 0); }`;
+// Light volume at half resolution: rgb = emitter point light × falloff × transmittance (marched toward the
+// emitter, stopping at its radius) + key light from above × transmittance; a = key-light transmittance.
+const V_LIGHT = `uniform sampler3D uDen;
+uniform vec3 uLres, uBox, uLp, uLcol, uKcol, uKd;
+uniform float uLRad, uFall, uExtL;
+vec4 at(int k) {
+  vec3 inv = 0.5 / uBox;
+  vec3 p = (vec3(gl_FragCoord.xy, float(k) + 0.5) / uLres - 0.5) * 2.0 * uBox;
+  vec3 tl = uLp - p;
+  float dist = length(tl);
+  vec3 dir = tl / max(dist, 1e-4);
+  // steps grow quadratically away from the cell: fine near (soft self-shadow detail), coarse far away
+  const int N = 14;
+  float span = max(dist - uLRad, 0.0), tau = 0.0;
+  for (int i = 0; i < N; i++) {
+    float a = float(i) / float(N), b = float(i + 1) / float(N);
+    tau += texture(uDen, (p + dir * (span * 0.5 * (a * a + b * b))) * inv + 0.5).x * (b * b - a * a);
   }
-  // hot: 1 at birth, falls to 0 over [uHot0, uHot1] seconds (emissive → lit)
-  float hot = 1.0 - smoothstep(uHot0, uHot1, age);
-  float fin = smoothstep(0.0, 0.06, age);
-  // fade at end of life, and for the oldest ring slots that are about to be respawned
-  float fout = (1.0 - smoothstep(uFade, 1.0, k)) * clamp(float(pi) / uFadeN, 0.0, 1.0);
-  float tail = smoothstep(0.15, 0.85, k);
-  float sr = 0.5 + 0.9 * r2 * sqrt(r2);
-  float rad = uR0 * sr * (0.55 + uGrow * sqrt(age));
-  float dens = mix(uDens0, uDens1, 1.0 - hot) * mix(1.0, 0.4, tail) * fin * fout;
-  // albedo: hot colour → saturated mid tone (cyan/teal for Aurora) → cool → tail
-  vec3 hc = pal(s.w);
-  vec3 m = mix(hc, uAlb, 0.5);
-  float l = luma(m);
-  m = max(vec3(l) + (m - vec3(l)) * 2.2, vec3(0.0));
-  m *= 0.85 * max(mx(hc), mx(uAlb)) / max(mx(m), 1e-3);
-  float cz = 1.0 - hot;
-  vec3 alb = cz < 0.5 ? mix(hc, m, cz * 2.0) : mix(m, uAlb, cz * 2.0 - 1.0);
-  alb = mix(alb, uTail, tail);
-  vHot = hc;
-  vAlb = alb;
-  // per-puff shading constants: deeper, more saturated emissive body; scatter albedo for coloured light
-  vBody = pow(hc, vec3(1.8)) * (mx(hc) / max(mx(pow(hc, vec3(1.8))), 1e-4));
-  vSAlb = mix(alb, vec3(mx(alb)), 0.25);
-  vP = vec4(uEmis * hot * hot * fin * fout, dens, rad, r3);
-  vec2 q = CORNER[c];
-  vQ = q;
-  vG = vec3(0.0);
-  vGd = vec4(0.0, 0.0, 1.0, 0.0);
-  if (SHADE) {
-    vec2 gt = uGlowTexel * 2.0;
-    vec4 g0 = texture(uGlow, s.xy);
-    float gx = luma(texture(uGlow, s.xy + vec2(gt.x, 0.0)).rgb) - luma(texture(uGlow, s.xy - vec2(gt.x, 0.0)).rgb);
-    float gy = luma(texture(uGlow, s.xy + vec2(0.0, gt.y)).rgb) - luma(texture(uGlow, s.xy - vec2(0.0, gt.y)).rgb);
-    vG = g0.rgb;
-    vGd = vec4(normalize(vec3(gx, gy, 0.35 * luma(g0.rgb) + 1e-5)), g0.a);
-    // aged puffs that drifted away from the plume get thinner, so they read as haze rather than blobs
-    float iso = smoothstep(1.5, 16.0, g0.a);
-    vP.y *= mix(1.0, mix(0.06, 1.0, iso * iso), 1.0 - hot);
+  float Tp = exp(-tau * span * uExtL);
+  vec3 te = (sign(uKd) * uBox - p) / uKd;
+  float sk = min(min(te.x, te.y), te.z), tk = 0.0;
+  for (int i = 0; i < N; i++) {
+    float a = float(i) / float(N), b = float(i + 1) / float(N);
+    tk += texture(uDen, (p + uKd * (sk * 0.5 * (a * a + b * b))) * inv + 0.5).x * (b * b - a * a);
   }
-  // stretch the puff along the local flow (aspect-corrected space) so lobes get swept, elongated shapes
-  vec2 va = texture(uVel, s.xy).xy * uVelTexel * vec2(uAspect, 1.0);
-  float sp = length(va);
-  vec2 dir = sp > 1e-5 ? va / sp : vec2(1.0, 0.0);
-  float st = 1.0 + min(sp * uStretch, 0.45);
-  vec2 off = q.x * dir * (rad * st) + q.y * vec2(-dir.y, dir.x) * (rad / sqrt(st));
-  vRot = dir;
-  gl_Position = vec4(s.xy * 2.0 - 1.0 + off * 2.0 * vec2(1.0 / uAspect, 1.0), 0.0, 1.0);
-}`;
-}
-
-// Puff density map (additive): rgb = emission × thickness, a = opacity × thickness
-const FS_PUFF_DENS = `#version 300 es
-precision highp float;
-precision highp int;
-in vec3 vHot; in vec3 vAlb; in vec4 vP; in vec2 vQ;
-uniform float uDW;
-out vec4 o;
-void main() {
-  float r2 = dot(vQ, vQ);
-  if (r2 >= 1.0) discard;
-  float th = (1.0 - r2) * uDW;
-  o = vec4(vHot * (vP.x * th), (1.0 - exp(-vP.y)) * th);
-}`;
-
-// Gradient noise with analytic derivatives for the puff lumps (one hash per corner, no trig).
-// Baked once into a texture (NZ_BAKE) instead of being evaluated per puff fragment.
-const LUMP_NOISE = `
-vec2 hgrad(ivec2 i) {
-  uint h = pcg(uint(i.x) * 1597334677u ^ uint(i.y) * 3812015801u);
-  return vec2(float(h & 0xFFFFu), float(h >> 16u)) * (2.0 / 65535.0) - 1.0;
-}
-vec3 lumpNoise(vec2 p) {
-  vec2 i = floor(p); vec2 f = p - i; ivec2 ii = ivec2(i);
-  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-  vec2 du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
-  vec2 ga = hgrad(ii), gb = hgrad(ii + ivec2(1, 0)), gc = hgrad(ii + ivec2(0, 1)), gd = hgrad(ii + ivec2(1, 1));
-  float va = dot(ga, f), vb = dot(gb, f - vec2(1.0, 0.0)), vc = dot(gc, f - vec2(0.0, 1.0)), vd = dot(gd, f - vec2(1.0, 1.0));
-  return vec3(va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd),
-              ga + u.x * (gb - ga) + u.y * (gc - ga) + u.x * u.y * (ga - gb - gc + gd) +
-              du * (u.yx * (va - vb - vc + vd) + vec2(vb, vc) - va));
-}
-`;
-// Bake domain: the shade pass looks up q * 2.2 + (10 + r * 61.7, 10 + r * 23.3) with |q| < 1 and r in [0, 1],
-// i.e. x in [7.8, 73.9], y in [7.8, 35.5]. The baked rectangle [7, 75] × [7, 36] covers it at 16 texels per
-// noise cell (1088 × 464). Changing those constants means changing NZ_ORIGIN/NZ_SPAN and the bake size too.
-const NZ_BAKE = COMMON + LUMP_NOISE + `
-void main() { o = vec4(lumpNoise(vec2(7.0) + vUv * vec2(68.0, 29.0)), 1.0); }`;
-
-// Puff shading: lumpy soft-sphere impostor. Wrap diffuse toward the point light in 3D, shadowed by the
-// light map; key + ambient light darkened in the rims (creases between lobes); light from the nearby glow;
-// young puffs add translucent "glassy" emission. Output is premultiplied for ONE, ONE_MINUS_SRC_ALPHA.
-const FS_PUFF_SHADE = `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-in vec3 vHot; in vec3 vAlb; in vec4 vP; in vec2 vQ; in vec3 vG; in vec4 vGd; in vec2 vRot; in vec3 vBody; in vec3 vSAlb;
-uniform sampler2D uLit, uNz;
-uniform vec2 uInvRes, uLight;
-uniform float uLightZ, uAspect, uLump, uEmis;
-uniform vec3 uAmb, uKeyC;
-out vec4 o;
-const vec2 NZ_ORIGIN = vec2(7.0), NZ_SPAN = vec2(68.0, 29.0);
-void main() {
-  vec2 q = vQ;
-  float rq = dot(q, q);
-  if (rq >= 1.0) discard;
-  vec3 nz = texture(uNz, (q * 2.2 + vec2(10.0 + vP.w * 61.7, 10.0 + vP.w * 23.3) - NZ_ORIGIN) / NZ_SPAN).xyz;
-  float r2 = rq * (1.0 + uLump * (0.5 + 0.5 * nz.x));
-  if (r2 >= 1.0) discard;
-  float th = 1.0 - r2;
-  vec3 nl = normalize(vec3(q - uLump * 0.4 * nz.yz, sqrt(th) + 0.03));
-  // local quad frame → screen (the quad is rotated along the flow)
-  vec3 n = vec3(vRot.x * nl.x - vRot.y * nl.y, vRot.y * nl.x + vRot.x * nl.y, nl.z);
-  float hot = clamp(vP.x / max(uEmis, 1e-4), 0.0, 1.0);
-  // soft parabolic profile while young and glassy, firmer silhouette once aged
-  float a = 1.0 - exp(-vP.y * mix(pow(th, 0.7), th, hot));
-  vec2 uv = gl_FragCoord.xy * uInvRes;
-  float rad = vP.z;
-
-  vec3 pos = vec3(uv.x * uAspect, uv.y, n.z * rad);
-  vec3 L = normalize(vec3(uLight.x * uAspect, uLight.y, uLightZ) - pos);
-  float wrap = clamp((dot(n, L) + 0.4) / 1.4, 0.0, 1.0);
-  vec4 lm = texture(uLit, uv + n.xy * (rad * 0.8) * vec2(1.0 / uAspect, 1.0));
-
-  float key = clamp(dot(n, normalize(vec3(-0.35, 0.8, 0.5))) * 0.5 + 0.5, 0.0, 1.0);
-  key *= key;
-  float occ = mix(0.5 + 0.15 * nz.x, 1.0, n.z) * (1.0 - 0.3 * (1.0 - exp(-vGd.w * 0.03)));
-  float gw = clamp((dot(n, vGd.xyz) + 0.3) / 1.3, 0.0, 1.0);
-
-  vec3 lit = vAlb * (uAmb + uKeyC * key) * occ
-           + vSAlb * (lm.rgb * wrap + vG * (0.3 + 0.7 * gw)) * mix(occ, 1.0, 0.5);
-  lit *= 1.0 - 0.85 * hot;
-  // glassy emission: bright rims in the hot colour over a deeper, more saturated body (vBody)
-  // rims broken into irregular arcs by the puff's noise, so overlapping shells read as glassy sheets, not rings
-  float rim = (1.0 - nl.z) * (1.0 - nl.z) * smoothstep(0.0, 0.3, th) * smoothstep(-0.25, 0.45, nz.x);
-  vec3 em = vP.x * (vHot * (2.4 * rim) + vBody * (0.16 * th));
-  o = vec4(lit * a + em, a);
-}`;
-
-// Glassy wisps: only the newest fine particles, drawn from a ring range ending at the head
-const VS_WISP = `#version 300 es
-precision highp float;
-precision highp int;
-precision highp sampler2D;
-uniform sampler2D uState;
-uniform int uW, uTotal, uOffset;
-uniform float uLifeMin, uLifeMax, uWeight;
-uniform vec3 uHot[4];
-out vec4 vCol;
-${COMMON}
-vec3 pal(float t) {
-  t = fract(t) * 4.0; int i = int(t);
-  return mix(uHot[i], uHot[(i + 1) & 3], smoothstep(0.0, 1.0, fract(t)));
-}
-void main() {
-  int id = (gl_VertexID + uOffset) % uTotal;
-  vec4 s = texelFetch(uState, ivec2(id % uW, id / uW), 0);
-  uint h = pcg(uint(id) + 0x6A09E667u);
-  float r1 = float(h & 0xFFFFu) * (1.0 / 65535.0);
-  float r2 = float(h >> 16u) * (1.0 / 65535.0);
-  float k = s.z / mix(uLifeMin, uLifeMax, r1);
-  if (k >= 1.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 1.0; vCol = vec4(0.0); return; }
-  float a = smoothstep(0.0, 0.03, s.z) * (1.0 - smoothstep(0.25, 1.0, k));
-  float w = a * mix(0.4, 1.8, r2 * r2) * uWeight;
-  vCol = vec4(pal(s.w) * w, w);
-  gl_Position = vec4(s.xy * 2.0 - 1.0, 0.0, 1.0);
-  gl_PointSize = 1.0;
+  float Tk = exp(-tk * sk * uExtL);
+  return vec4(uLcol * (Tp / (1.0 + dist * dist * uFall)) + uKcol * Tk, Tk);
 }`;
 
 /* ------------------------------------------------------------------ */
@@ -939,12 +997,11 @@ try {
 }
 // Volume mode programs: if any of them fails, only the volume mode is disabled
 let volOK = true;
+const pv = {};
 try {
-  pr.puffDens = program(vsPuff(false), FS_PUFF_DENS);
-  pr.puffShade = program(vsPuff(true), FS_PUFF_SHADE);
-  pr.wisps = program(VS_WISP, FS.pFrag);
-  pr.nzBake = program(VS_QUAD, FH + NZ_BAKE);
-  for (const k of Object.keys(VFS)) pr[k] = program(VS_QUAD, FH + VFS[k]);
+  for (const k of Object.keys(VFS)) pv[k] = program(VS_QUAD, FH + VFS[k]);
+  pv.to3d = program(VS_QUAD, fsLayers(V_TO3D));
+  pv.light = program(VS_QUAD, fsLayers(V_LIGHT));
 } catch (err) {
   console.error('Volymläget är avstängt:', err);
   volOK = false;
@@ -1060,7 +1117,8 @@ function buildSim() {
   pressure = resampleDouble(pressure, sw, sh, FMT.r, gl.NEAREST);
   divergence = remake(divergence, sw, sh, FMT.r, gl.NEAREST);
   curlT = remake(curlT, sw, sh, FMT.r, gl.NEAREST);
-  $('hudGrid').textContent = sw + '×' + sh;
+  grid2DText = sw + '×' + sh;
+  updateGridHud();
 }
 function initParticles() {
   use(pr.pInit);
@@ -1091,59 +1149,135 @@ function buildScreen() {
   for (let i = 0; i < 6 && w >= 4 && h >= 4; i++) { bloomLv.push(makeFBO(w, h, FMT.rgba, gl.LINEAR)); w >>= 1; h >>= 1; }
   if (!bloomLv.length) bloomLv.push(makeFBO(Math.max(1, w), Math.max(1, h), FMT.rgba, gl.LINEAR));
 }
-// Volume mode targets. The puff state ring buffer is small and keeps simulating in both modes, so switching
-// modes keeps the scene. The reduced-res puff layer, density/shadow maps, glow field and baked lump noise
-// exist only while the volume mode is active.
-let pfstate = null, vPuff = null, vDens = null, vTmp = null, vBlur = null, vLit = null, vGlowA = null, vGlowB = null, nzT = null;
-let PFW = 0, PFH = 0, NPF = 0, headPF = 0, emitCarryPF = 0, volScale = 1;
-function initPuffs() {
-  if (!pfstate) return;
-  use(pr.pInit);
-  draw(pfstate.read); draw(pfstate.write);
-  headPF = 0; emitCarryPF = 0;
+// Volume mode targets: the solver atlases (velocity; scalars = density, temperature, freshness; curl; divergence;
+// pressure), TEXTURE_3D copies for rendering (density + half-res light volume) and the reduced-res ray-march layer.
+// Built on first use and kept in particle mode, so a mode round trip keeps the scene. A resize or quality change
+// resamples the old fields into the new grid.
+const max3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
+let vol3 = null, vMarchT = null, grid2DText = '–';
+
+function make3D(w, h, d) {
+  gl.activeTexture(gl.TEXTURE0);
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_3D, tex);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  gl.texImage3D(gl.TEXTURE_3D, 0, FMT.rgba[0], w, h, d, 0, FMT.rgba[1], FMT.rgba[2], null);
+  gl.bindTexture(gl.TEXTURE_3D, null);
+  const fbos = [];
+  let ok = true;
+  for (let z0 = 0; z0 < d; z0 += V_MRT) {
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    const bufs = [];
+    for (let j = 0; j < V_MRT; j++) {
+      if (z0 + j < d) { gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + j, tex, 0, z0 + j); bufs.push(gl.COLOR_ATTACHMENT0 + j); }
+      else bufs.push(gl.NONE);
+    }
+    gl.drawBuffers(bufs);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE) {
+      gl.viewport(0, 0, w, h);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    } else ok = false;
+    fbos.push({ fbo, w, h, z0 });
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { tex, w, h, d, fbos, ok };
 }
-function buildPuffs() {
-  if (!volOK) return;
+function free3DTex(t) { if (t) { gl.deleteTexture(t.tex); for (const f of t.fbos) gl.deleteFramebuffer(f.fbo); } }
+// The renderer needs layered draws into a filterable RGBA16F TEXTURE_3D; without them volume mode is unavailable
+if (volOK) {
+  const t = make3D(4, 4, 4);
+  if (!t.ok || max3D < 128) { console.error('Volymläget är avstängt: kan inte rendera till 3D-texturer.'); volOK = false; P.mode = 'particles'; }
+  free3DTex(t);
+}
+
+// 3D grid for the current window: q.g cubic cells on the short screen side, depth q.gz × that. The atlas packs the
+// Z slices `cols` per row, choosing the squarest layout within the texture limit.
+function grid3D(quality = P.quality) {
+  const q = QUALITY[quality];
+  let s = q.g;
+  for (;;) {
+    // X is a multiple of 4 (pressure is packed 4 cells per texel along x)
+    const lng = Math.round(s * Math.max(aspect, 1 / aspect));
+    const [X, Y] = aspect >= 1 ? [Math.max(4, Math.round(lng / 4) * 4), s] : [Math.max(4, Math.round(s / 4) * 4), lng];
+    const Z = Math.max(8, Math.round((s * q.gz) / 4) * 4);
+    let cols = 0, best = Infinity;
+    for (let c = 1; c <= Z; c++) {
+      const rows = Math.ceil(Z / c), w = c * X, h = rows * Y;
+      if (w > maxTex || h > maxTex) continue;
+      const cost = (Math.max(w, h) * c * rows) / Z;
+      if (cost < best) { best = cost; cols = c; }
+    }
+    if ((cols && Math.max(X, Y, Z) <= max3D && X * Y * Z <= 2.4 * q.g * q.g * q.g) || s <= 16) {
+      return cols ? { X, Y, Z, cols, AW: cols * X, AH: Math.ceil(Z / cols) * Y, PW: cols * (X >> 2) } : null;
+    }
+    s = Math.max(16, Math.floor(s * 0.9));
+  }
+}
+function ui3(n, a, b, c) { const l = cur.u[n]; if (l != null) gl.uniform3i(l, a, b, c); }
+function ut3(n, unit, t) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_3D, t.tex); ui(n, unit); }
+function atlasU() { const V = vol3; ui3('uG', V.X, V.Y, V.Z); ui3('uGp', V.X >> 2, V.Y, V.Z); ui('uCols', V.cols); uf('uAtl', 1 / V.AW, 1 / V.AH); }
+function free3DSim(V) {
+  freeDouble(V.vel); freeDouble(V.scal); freeFBO(V.tmp); freeFBO(V.curl); freeFBO(V.div); freeDouble(V.pres);
+  free3DTex(V.den3); free3DTex(V.lit3);
+}
+function build3D() {
+  if (!volOK || !cssW) return false;
+  const g = grid3D();
+  if (!g) return false;
+  const old = vol3;
+  if (!old || old.X !== g.X || old.Y !== g.Y || old.Z !== g.Z || old.cols !== g.cols) {
+    const V = g;
+    V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2);
+    V.vel = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
+    V.scal = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
+    V.tmp = makeFBO(g.AW, g.AH, FMT.rgba, gl.LINEAR);
+    V.curl = makeFBO(g.AW, g.AH, FMT.rgba, gl.NEAREST);
+    V.div = makeFBO(g.PW, g.AH, FMT.rgba, gl.NEAREST);
+    V.pres = makeDouble(g.PW, g.AH, FMT.rgba, gl.NEAREST);
+    V.den3 = make3D(g.X, g.Y, g.Z);
+    V.lit3 = make3D(V.LX, V.LY, V.LZ);
+    vol3 = V;
+    if (old) {
+      // velocity is in cells/s, so it scales with the grid
+      const k = g.Y / old.Y;
+      for (const [src, dst, m] of [[old.vel, V.vel, k], [old.scal, V.scal, 1]]) {
+        use(pv.resample); atlasU();
+        ut('uSrc', 0, src.read); ui3('uGo', old.X, old.Y, old.Z); ui('uColso', old.cols); uf('uAtlo', 1 / old.AW, 1 / old.AH);
+        uf('uMul', m, m, m, 1);
+        draw(dst.read);
+      }
+      free3DSim(old);
+    }
+    updateGridHud();
+    qualityLabels();
+  }
   const q = QUALITY[P.quality];
-  if (pfstate && PFW === q.fw && PFH === q.fh) return;
-  freeDouble(pfstate);
-  PFW = q.fw; PFH = q.fh; NPF = PFW * PFH;
-  pfstate = makeDouble(PFW, PFH, FMT.rgba32, gl.NEAREST);
-  initPuffs();
-  $('hudPuffs').textContent = NPF.toLocaleString('sv-SE');
+  vMarchT = remake(vMarchT, Math.max(2, Math.round(cssW * q.rm)), Math.max(2, Math.round(cssH * q.rm)), FMT.rgba, gl.LINEAR);
+  return true;
 }
-// Big puffs are soft, so their layer can be coarser. Scaling its resolution with the puff radius keeps the
-// fill cost bounded at large Storlek × Puffstorlek; it is 1 at the defaults and quantised to limit rebuilds.
-function puffLayerScale() {
-  const r = P.brush * 1.2 * P.puffSize;
-  return Math.min(1, Math.max(0.35, Math.round((0.036 / r) * 8) / 8));
+function clear3D() {
+  if (!vol3) return;
+  for (const d of [vol3.vel, vol3.scal, vol3.pres]) {
+    for (const f of [d.read, d.write]) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo); gl.viewport(0, 0, f.w, f.h);
+      gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+  }
 }
-function buildVolume() {
-  if (!volOK || P.mode !== 'volume' || !cssW) return;
-  buildPuffs();
-  const q = QUALITY[P.quality];
-  const s = volScale = puffLayerScale();
-  vPuff = remake(vPuff, Math.max(2, Math.round(cssW * q.puff * s)), Math.max(2, Math.round(cssH * q.puff * s)), FMT.rgba, gl.LINEAR);
-  const [lw, lh] = dims(Math.max(64, Math.round(q.vl * s)));
-  vDens = remake(vDens, lw, lh, FMT.rgba, gl.LINEAR);
-  vTmp = remake(vTmp, lw, lh, FMT.rgba, gl.LINEAR);
-  vBlur = remake(vBlur, lw, lh, FMT.rgba, gl.LINEAR);
-  vLit = remake(vLit, lw, lh, FMT.rgba, gl.LINEAR);
-  const [gw, gh] = dims(64);
-  vGlowA = remake(vGlowA, gw, gh, FMT.rgba, gl.LINEAR);
-  vGlowB = remake(vGlowB, gw, gh, FMT.rgba, gl.LINEAR);
-  if (!nzT) { nzT = makeFBO(1088, 464, FMT.rgba, gl.LINEAR); use(pr.nzBake); draw(nzT); }
-}
-function freeVolume() {
-  for (const f of [vPuff, vDens, vTmp, vBlur, vLit, vGlowA, vGlowB, nzT]) freeFBO(f);
-  vPuff = vDens = vTmp = vBlur = vLit = vGlowA = vGlowB = nzT = null;
+function updateGridHud() {
+  $('hudGrid').textContent = P.mode === 'volume' && vol3 ? vol3.X + '×' + vol3.Y + '×' + vol3.Z : grid2DText;
 }
 // True when this frame should simulate and render the volume mode (builds its targets on demand,
 // so setting krakatoaDebug.P.mode directly also works)
 function volReady() {
   if (P.mode !== 'volume' || !volOK) return false;
-  if (!vPuff || !pfstate) buildVolume();
-  return !!(vPuff && pfstate);
+  return build3D();
 }
 
 function resize(force) {
@@ -1155,9 +1289,7 @@ function resize(force) {
   canvas.height = Math.max(1, Math.round(h * d));
   buildSim();
   buildParticles();
-  buildPuffs();
   buildScreen();
-  buildVolume();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1169,15 +1301,17 @@ function preparePalette() {
   const p = PALETTES[P.palette];
   const hot = p.hot.map(toLin);
   pal = { hot, hotFlat: new Float32Array(hot.flat()), cool: toLin(p.cool), key: toLin(p.key), bg0: toLin(p.bg[0]), bg1: toLin(p.bg[1]) };
-  // Volume mode: aged albedo (cool, lifted so dark cool colours still read), far-tail albedo, key-tinted ambient/key light
+  // Volume mode: glow of cooling smoke, albedo of cooled and of the oldest smoke, key-tinted ambient/key light
   const peak = (c) => Math.max(c[0], c[1], c[2], 1e-4);
-  const lift = (c, lo) => c.map((v) => v * Math.max(1, lo / peak(c)));
-  pal.alb = lift(pal.cool, 0.55);
-  const tl = toLin(p.tail || p.cool);
-  pal.tail = tl.map((v) => (v * 0.55) / peak(tl));
-  const kn = pal.key.map((v) => 0.7 + (0.3 * v) / peak(pal.key));
-  pal.amb = kn.map((v) => v * 0.18);
-  pal.keyC = kn.map((v) => v * 0.8);
+  pal.ember = toLin(p.ember);
+  // albedos normalised by their peak channel, saturated colours a little brighter (they read darker)
+  const sat = (c) => 1 + 0.6 * (1 - (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / peak(c));
+  const al = toLin(p.smoke), tl = toLin(p.tail);
+  pal.alb = al.map((v) => (v * 0.55 * sat(al)) / peak(al));
+  pal.tail = tl.map((v) => (v * 0.3 * sat(tl)) / peak(tl));
+  const kn = pal.key.map((v) => 0.94 + (0.06 * v) / peak(pal.key));
+  pal.amb = kn.map((v) => v * 0.05);
+  pal.keyC = kn.map((v) => v * 3.2);
 }
 function palColor(t) {
   t = (((t % 1) + 1) % 1) * 4;
@@ -1230,9 +1364,17 @@ function updateDemo(dt) {
   if (!P.auto || pointers.size) { demo.on = false; return; }
   demo.t += dt;
   const t = demo.t;
-  const x = (0.5 + 0.27 * Math.sin(t * 0.53) + 0.08 * Math.sin(t * 1.71 + 1.3)) * cssW;
-  const y = (0.5 + 0.2 * Math.sin(t * 0.79 + 0.6) + 0.07 * Math.cos(t * 1.37)) * cssH;
-  const on = (t % 4.6) < 3.4;
+  let x, y, on;
+  if (P.mode === 'volume') {
+    // Volume mode: a slow wander through the lower part of the screen, so the plume rises across it
+    x = (0.45 + 0.21 * Math.sin(t * 0.37) + 0.05 * Math.sin(t * 1.13 + 1.3)) * cssW;
+    y = (0.73 + 0.08 * Math.sin(t * 0.61 + 0.6) + 0.03 * Math.cos(t * 1.37)) * cssH;
+    on = (t % 7) < 5.6;
+  } else {
+    x = (0.5 + 0.27 * Math.sin(t * 0.53) + 0.08 * Math.sin(t * 1.71 + 1.3)) * cssW;
+    y = (0.5 + 0.2 * Math.sin(t * 0.79 + 0.6) + 0.07 * Math.cos(t * 1.37)) * cssH;
+    on = (t % 4.6) < 3.4;
+  }
   if (on && !demo.on) { demo.p.prevX = x; demo.p.prevY = y; demo.p.path.length = 0; }
   demo.on = on;
   demo.p.x = x; demo.p.y = y;
@@ -1247,6 +1389,7 @@ const SEG = 16;
 const segA = new Float32Array(SEG * 2), segB = new Float32Array(SEG * 2);
 const segVel = new Float32Array(SEG * 4), segDye = new Float32Array(SEG * 4);
 const segHue = new Float32Array(SEG), segLen = new Float32Array(SEG), segEnd = new Int32Array(SEG);
+const segPx = new Float32Array(SEG * 2); // volume mode: the stroke's travel this frame (CSS px, y down)
 let segN = 0;
 let hue = 0;
 const FORCE = 6000;
@@ -1261,6 +1404,7 @@ function addSeg(ax, ay, bx, by, dx, dy, distPx, col, amt, h) {
   segDye[i * 4] = col[0] * amt; segDye[i * 4 + 1] = col[1] * amt; segDye[i * 4 + 2] = col[2] * amt; segDye[i * 4 + 3] = amt;
   segHue[i] = h;
   segLen[i] = Math.hypot(bx - ax, by - ay);
+  segPx[i * 2] = dx * distPx; segPx[i * 2 + 1] = dy * distPx;
 }
 
 // Volume mode keeps the emission colour in the palette's hot[3] → hot[0] band (Aurora: green ↔ lime),
@@ -1397,38 +1541,61 @@ function updateParticles(dt, time, frame) {
   head = (head + count) % N;
 }
 
-// Volume mode: the puff population reuses pUpdate (same advection + ring-buffer respawn) on its own state.
-// The ring cycles once per maximum puff life, so at Utsläpp ×1 puffs die before their slot is reused.
-const puffLife = () => [2.0 * P.life, 5.0 * P.life];
-const puffRate = () => (NPF / puffLife()[1]) * Math.min(P.emission, 1);
-const segEndPF = new Int32Array(SEG);
-function updatePuffs(dt, time, frame) {
-  let count = 0;
-  if (segN > 0) {
-    emitCarryPF += puffRate() * dt;
-    count = Math.min(Math.floor(emitCarryPF), NPF);
-    emitCarryPF -= count;
-    const brushPx = P.brush * cssH;
-    let total = 0;
-    for (let i = 0; i < segN; i++) total += segLen[i] + brushPx;
-    let acc = 0;
-    for (let i = 0; i < segN; i++) { acc += segLen[i] + brushPx; segEndPF[i] = Math.round((count * acc) / total); }
-    segEndPF[segN - 1] = count;
-  } else {
-    emitCarryPF = 0;
+// Volume mode: one step of the 3D smoke solver. The emitters are soft spheres swept along this frame's stroke
+// segments on the mid plane (z = Z/2): a held pointer gives a gentle upward jet, a moving one drags the smoke along.
+const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
+const emitRadius = () => P.brush * 1.6; // screen heights
+function emitterUniforms() {
+  ui('uN', segN); uarr('uEA', 'uniform3fv', emA); uarr('uEB', 'uniform3fv', emB);
+  const r = emitRadius() * vol3.Y;
+  uf('uRad2', r * r);
+}
+function step3D(dt, time) {
+  const V = vol3, Y = V.Y, q = QUALITY[P.quality];
+  const gx = (u) => (u - 0.5) * aspect * Y + V.X / 2;
+  const kv = (0.7 * P.force * Y) / (cssH * Math.max(dt, 1e-3)), vmax = 1.5 * Y;
+  for (let i = 0; i < segN; i++) {
+    emA[i * 3] = gx(segA[i * 2]); emA[i * 3 + 1] = segA[i * 2 + 1] * Y; emA[i * 3 + 2] = V.Z / 2;
+    emB[i * 3] = gx(segB[i * 2]); emB[i * 3 + 1] = segB[i * 2 + 1] * Y; emB[i * 3 + 2] = V.Z / 2;
+    let vx = 0, vy = 0.15 * Y * P.force;
+    if (segLen[i] > 0) { vx = segPx[i * 2] * kv; vy = -segPx[i * 2 + 1] * kv; }
+    const m = Math.hypot(vx, vy), k = m > vmax ? vmax / m : 1;
+    emV[i * 3] = vx * k; emV[i * 3 + 1] = vy * k; emV[i * 3 + 2] = 0;
   }
 
-  use(pr.pUpdate);
-  ut('uState', 0, pfstate.read); ut('uVel', 1, velocity.read);
-  uf('uVelTexel', velocity.tx, velocity.ty); uf('uDt', dt); uf('uTime', time); uf('uAspect', aspect);
-  uf('uSigma', P.brush * 0.55); uf('uHueSpread', 0.05);
-  uf('uNoiseAmp', 0.012 * P.turbulence); uf('uNoiseFreq', 4.0); uf('uNoiseSpeed', 1.5);
-  ui('uW', PFW); ui('uTotal', NPF); ui('uHead', headPF); ui('uCount', count); ui('uN', Math.max(segN, 1));
-  uarr('uA', 'uniform2fv', segA); uarr('uB', 'uniform2fv', segB);
-  uarr('uEnd', 'uniform1iv', segEndPF); uarr('uHue', 'uniform1fv', segHue);
-  if (cur.u.uFrame != null) gl.uniform1ui(cur.u.uFrame, (frame * 7919 + 104729) >>> 0);
-  draw(pfstate.write); pfstate.swap();
-  headPF = (headPF + count) % NPF;
+  // 1. Scalars: MacCormack advection, decay (Livslängd, Avsvalning), injection at the emitters
+  use(pv.advS); atlasU();
+  ut('uVel', 0, V.vel.read); ut('uSrc', 1, V.scal.read); uf('uDt', dt);
+  draw(V.tmp);
+  use(pv.advS2); atlasU(); emitterUniforms();
+  ut('uVel', 0, V.vel.read); ut('uSrc', 1, V.scal.read); ut('uHat', 2, V.tmp);
+  uf('uDt', dt); uf('uTime', time); uf('uDRate', 9 * P.emission); uf('uDMax', 3); uf('uTRate', 9);
+  uf('uDecay', Math.exp(-dt / (2.4 * P.life)), Math.exp(-dt / P.coolTime), Math.exp(-dt / (2.2 * P.life)));
+  draw(V.scal.write); V.scal.swap();
+
+  // 2. Velocity self-advection
+  use(pv.advV); atlasU();
+  ut('uVel', 0, V.vel.read); uf('uDt', dt); uf('uDamp', Math.exp(-0.15 * dt));
+  draw(V.vel.write); V.vel.swap();
+
+  // 3. Vorticity, then forces: confinement, buoyancy, turbulence, emitters
+  use(pv.curl); atlasU(); ut('uVel', 0, V.vel.read); draw(V.curl);
+  use(pv.force); atlasU(); emitterUniforms();
+  ut('uVel', 0, V.vel.read); ut('uCurl', 1, V.curl); ut('uScal', 2, V.scal.read);
+  uf('uDt', dt); uf('uEps', P.swirl * 0.002 * Y); uf('uBuoy', 0.9 * P.lift * Y);
+  uf('uTurb', P.turbulence * 0.3 * Y); uf('uTF', 6.2831853 / (0.42 * Y)); uf('uTime', time);
+  uf('uKin', 0.6); uf('uPush', 0.5 * P.force * Y); uarr('uEV', 'uniform3fv', emV);
+  draw(V.vel.write); V.vel.swap();
+
+  // 4. Pressure projection (Jacobi, warm-started from last frame)
+  use(pv.div); atlasU(); ut('uVel', 0, V.vel.read); draw(V.div);
+  use(pv.jacobi); atlasU();
+  for (let i = 0; i < q.jac; i++) {
+    ut('uP', 0, V.pres.read); ut('uDiv', 1, V.div); uf('uMul', i ? 1 : 0.85);
+    draw(V.pres.write); V.pres.swap();
+  }
+  use(pv.grad); atlasU(); ut('uP', 0, V.pres.read); ut('uVel', 1, V.vel.read);
+  draw(V.vel.write); V.vel.swap();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1525,107 +1692,48 @@ function postFX(frame) {
   draw(null);
 }
 
-/* Volume mode render: lit puff impostors                             */
-const VOL_DK = 0.3;     // raw puff density → saturated coverage for the shadow march
-const VOL_EMIS = 0.2;   // per-puff emission of brand-new smoke (stack luminance ≈ emission / opacity)
-function puffUniforms() {
-  const [pl0, pl1] = puffLife();
-  ut('uState', 0, pfstate.read);
-  ui('uW', PFW); ui('uTotal', NPF); ui('uOffset', headPF);
-  uf('uAspect', aspect); uf('uLifeMin', pl0); uf('uLifeMax', pl1);
-  uf('uHot0', P.coolTime * 0.4); uf('uHot1', P.coolTime * 1.45);
-  uf('uR0', P.brush * 1.2 * P.puffSize); uf('uGrow', 0.5);
-  const de = Math.max(1, P.emission);
-  uf('uDens0', 0.09 * de); uf('uDens1', 3.5 * de); uf('uEmis', VOL_EMIS); uf('uFade', 0.55);
-  uf('uFadeN', Math.max(1, puffRate() * 0.35));
-  uarr('uHot', 'uniform3fv', pal.hotFlat); uf('uAlb', ...pal.alb); uf('uTail', ...pal.tail);
-  ut('uVel', 3, velocity.read); uf('uVelTexel', velocity.tx, velocity.ty); uf('uStretch', 1.0);
-}
+/* Volume mode render: ray-marched 3D smoke                           */
+const V_CAM = 2.4;  // camera distance from the mid plane in screen heights (mild perspective)
+const V_EXT = 9;   // extinction per unit density per screen height
+const V_KEY = (() => { const k = [0.45, 0.85, 0.28], l = Math.hypot(...k); return k.map((v) => v / l); })();
+function render3D(frame) {
+  const V = vol3;
+  const box = [V.X / V.Y / 2, 0.5, V.Z / V.Y / 2];
 
-function renderVolume(frame) {
-  const [lmin, lmax] = life();
+  // 1. Scalar atlas → TEXTURE_3D (hardware trilinear for the passes below)
+  use(pv.to3d);
+  ut('uSrc', 0, V.scal.read); ui3('uG', V.X, V.Y, V.Z); ui('uCols', V.cols);
+  for (const f of V.den3.fbos) { ui('uL0', f.z0); draw(f); }
 
-  // 1. Glassy wisps: the newest fine particles, additive into the particle buffer
-  gl.bindFramebuffer(gl.FRAMEBUFFER, accum.fbo);
-  gl.viewport(0, 0, accum.w, accum.h);
-  gl.clearColor(0, 0, 0, 0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  if (P.showParticles && P.particles > 0) {
-    const wl1 = 1.0 * P.life;
-    const M = Math.min(N, Math.ceil((N / ((lmin + lmax) / 2)) * P.emission * wl1 * 1.2) + 256);
-    use(pr.wisps);
-    ut('uState', 0, pstate.read); ui('uW', PW); ui('uTotal', N); ui('uOffset', (((head - M) % N) + N) % N);
-    uf('uLifeMin', 0.45 * P.life); uf('uLifeMax', wl1);
-    uf('uWeight', P.particles * 0.3 * ((accum.w * accum.h) / 1.3e6) * (1048576 / N));
-    uarr('uHot', 'uniform3fv', pal.hotFlat);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-    gl.bindVertexArray(emptyVAO);
-    gl.drawArrays(gl.POINTS, 0, M);
-    gl.disable(gl.BLEND);
-  }
+  // 2. Light volume: point light at the emitter (its glow) + soft key light from above, both self-shadowed
+  const hc = palColor(emitHue(hue));
+  const lp = light.level * P.light * 1.6;
+  const lc = [0, 1, 2].map((i) => (hc[i] + pal.ember[i]) * 0.5 * lp);
+  use(pv.light);
+  ut3('uDen', 5, V.den3);
+  uf('uLres', V.LX, V.LY, V.LZ); uf('uBox', ...box);
+  uf('uLp', (light.x - 0.5) * aspect, light.y - 0.5, 0); uf('uLRad', emitRadius());
+  uf('uFall', 26); uf('uExtL', V_EXT * 3.0 * P.shadows);
+  const keyC = pal.keyC.map((v) => v * P.light);
+  uf('uLcol', ...lc); uf('uKcol', ...keyC); uf('uKd', ...V_KEY);
+  for (const f of V.lit3.fbos) { ui('uL0', f.z0); draw(f); }
 
-  // 2. Puff density map (additive) → blurred: drives shadows, glow and occlusion
-  gl.bindFramebuffer(gl.FRAMEBUFFER, vDens.fbo);
-  gl.viewport(0, 0, vDens.w, vDens.h);
-  gl.clearColor(0, 0, 0, 0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  use(pr.puffDens);
-  puffUniforms();
-  uf('uDW', 24576 / NPF);
-  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE);
-  gl.bindVertexArray(emptyVAO);
-  gl.drawArrays(gl.TRIANGLES, 0, NPF * 6);
-  gl.disable(gl.BLEND);
-  use(pr.blur);
-  // blur width follows the puff layer scale so it stays the same on screen
-  ut('uSrc', 0, vDens); uf('uDir', vDens.tx * 1.5 * volScale, 0); draw(vTmp);
-  ut('uSrc', 0, vTmp); uf('uDir', 0, vDens.ty * 1.5 * volScale); draw(vBlur);
+  // 3. Ray march at reduced resolution
+  use(pv.march);
+  ut3('uDen', 5, V.den3); ut3('uLit', 6, V.lit3);
+  uf('uBox', ...box); uf('uCam', V_CAM); uf('uAspect', aspect); uf('uExt', V_EXT); uf('uStep', 1 / V.Y);
+  uf('uFrameF', frame % 64); uf('uEmis', 2.5);
+  uf('uHot', ...hc); uf('uEmb', ...pal.ember); uf('uAlb', ...pal.alb); uf('uTail', ...pal.tail);
+  uf('uAmb', ...pal.amb.map((v) => v * P.light)); uf('uKcol', ...keyC);
+  draw(vMarchT);
+  for (const u of [5, 6]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_3D, null); }
 
-  // 3. Glow field of the young, emissive smoke (light source for nearby puffs + halo)
-  use(pr.vGlowPre);
-  ut('uSrc', 0, vBlur); uf('uTexel', vBlur.tx, vBlur.ty); uf('uGain', 1.0); uf('uK', 0.6);
-  draw(vGlowA);
-  use(pr.blur);
-  for (const s of [1, 2, 3]) {
-    ut('uSrc', 0, vGlowA); uf('uDir', vGlowA.tx * s, 0); draw(vGlowB);
-    ut('uSrc', 0, vGlowB); uf('uDir', 0, vGlowA.ty * s); draw(vGlowA);
-  }
-
-  // 4. Light map: point light at the emitter/cursor, shadowed through the puff density
-  const lc = palColor(emitHue(hue));
-  const lp = light.level * P.light * 2.0;
-  use(pr.vLight);
-  ut('uDens', 0, vBlur);
-  uf('uLight', light.x, light.y); uf('uAbsorb', 4.5 * P.shadows); uf('uAspect', aspect);
-  uf('uFalloff', 9); uf('uFrameF', frame % 64); uf('uDK', VOL_DK);
-  uf('uLightCol', lc[0] * lp, lc[1] * lp, lc[2] * lp);
-  draw(vLit);
-
-  // 5. Shaded puffs at reduced resolution, oldest → newest, premultiplied "over"
-  gl.bindFramebuffer(gl.FRAMEBUFFER, vPuff.fbo);
-  gl.viewport(0, 0, vPuff.w, vPuff.h);
-  gl.clearColor(0, 0, 0, 0);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-  use(pr.puffShade);
-  puffUniforms();
-  ut('uGlow', 1, vGlowA); uf('uGlowTexel', vGlowA.tx, vGlowA.ty);
-  ut('uLit', 2, vLit); ut('uNz', 5, nzT);
-  uf('uInvRes', 1 / vPuff.w, 1 / vPuff.h);
-  uf('uLight', light.x, light.y); uf('uLightZ', 0.12); uf('uLump', 0.6);
-  uf('uAmb', ...pal.amb); uf('uKeyC', ...pal.keyC);
-  gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  gl.bindVertexArray(emptyVAO);
-  gl.drawArrays(gl.TRIANGLES, 0, NPF * 6);
-  gl.disable(gl.BLEND);
-
-  // 6. Composite into the HDR scene, then the shared bloom + tonemap
-  use(pr.vComposite);
-  ut('uPuff', 0, vPuff); ut('uAcc', 1, accum); ut('uGlow', 2, vGlowA); ut('uDye', 3, dye.read); ut('uLit', 4, vLit);
+  // 4. Composite over the background into the HDR scene, then the shared bloom + tonemap
+  use(pv.comp);
+  ut('uMarch', 0, vMarchT); uf('uMTexel', vMarchT.tx, vMarchT.ty);
   uf('uAspect', aspect); uf('uAir', 0.02 * light.level * P.light);
-  uf('uWisp', 0.05); uf('uHalo', 0.35 * P.bloom); uf('uHaze', P.showSmoke ? P.smoke * 0.6 : 0);
   uf('uBg0', ...pal.bg0); uf('uBg1', ...pal.bg1);
-  uf('uLightCol', lc[0] * lp, lc[1] * lp, lc[2] * lp); uf('uLightPos', light.x, light.y);
-  uf('uTail', ...pal.tail); uf('uAmb', ...pal.amb);
+  uf('uLightCol', ...lc); uf('uLightPos', light.x, light.y);
   draw(scene);
 
   postFX(frame);
@@ -1640,7 +1748,7 @@ function clearAll() {
   }
   initParticles();
   emitCarry = 0;
-  initPuffs();
+  clear3D();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1654,14 +1762,17 @@ function tick(dt) {
   updateLight(dt, emitters);
   const vol = volReady();
   if (!P.paused) {
-    if (segN) { hue += dt * 0.035; splat(); }
-    step(dt, time);
-    updateParticles(dt, time, frame);
-    if (pfstate) updatePuffs(dt, time, frame);
+    // Each mode simulates only its own scene; the other one stays as it was until you switch back
+    if (segN) { hue += dt * 0.035; if (!vol) splat(); }
+    if (vol) step3D(dt, time);
+    else {
+      step(dt, time);
+      updateParticles(dt, time, frame);
+    }
   } else {
     segN = 0;
   }
-  if (vol) renderVolume(frame);
+  if (vol) render3D(frame);
   else render(frame);
   frame++;
 }
@@ -1682,6 +1793,7 @@ window.krakatoaDebug = {
   run(frames = 240, dt = 1 / 60) { for (let i = 0; i < frames; i++) tick(dt); return frame; },
   setMode: (m) => setMode(m),
   get volumeOK() { return volOK; },
+  get grid3D() { return vol3 ? [vol3.X, vol3.Y, vol3.Z, vol3.AW, vol3.AH] : null; },
 };
 
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('Grafikkontexten tappades. Ladda om sidan för att starta igen.'); });
@@ -1723,26 +1835,37 @@ for (const [k, q] of Object.entries(QUALITY)) {
   o.textContent = `${q.label} · ${(q.pw * q.ph / 1e6).toFixed(q.pw * q.ph < 1e6 ? 2 : 1).replace('.', ',')} M partiklar`;
   qSel.appendChild(o);
 }
+const qLabels = [...qSel.options].map((o) => o.textContent);
+// Volym lists the 3D grid each quality gives for the current window shape instead of the particle count
+function qualityLabels() {
+  [...qSel.options].forEach((o, i) => {
+    const g = P.mode === 'volume' && cssW ? grid3D(o.value) : null;
+    o.textContent = g ? `${QUALITY[o.value].label} · ${g.X}×${g.Y}×${g.Z}` : qLabels[i];
+  });
+}
 qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
-  buildSim(); buildParticles(); buildPuffs(); buildScreen(); buildVolume();
+  buildSim(); buildParticles(); buildScreen();
 });
 
-// Läge: Partiklar (fine additive particle smoke) / Volym (lit puff impostors)
+// Läge: Partiklar (fine additive particle smoke) / Volym (ray-marched 3D smoke solver). The 3D targets are built
+// on the first volume frame and kept afterwards, so switching back and forth keeps both scenes.
 const MODES = [['particles', 'mode-particles'], ['volume', 'mode-volume']];
 function setMode(m) {
   if (m !== 'volume' || !volOK) m = 'particles';
-  const changed = m !== P.mode;
   P.mode = m;
   try { localStorage.setItem('krakatoa.mode', m); } catch (_) { /* storage is optional */ }
   const vol = m === 'volume';
   for (const [val, id] of MODES) $(id).setAttribute('aria-pressed', String(m === val));
   $('g-volume').hidden = !vol;
-  $('hudPuffSep').hidden = !vol;
-  $('hudPuffBox').hidden = !vol;
-  if (vol) { if (changed || !vPuff) buildVolume(); }
-  else if (changed) freeVolume();
+  // controls that only affect the particle renderer
+  for (const id of ['s-smoke', 's-particles']) $(id).parentElement.hidden = vol;
+  for (const id of ['t-showSmoke', 't-showParticles']) $(id).closest('label').hidden = vol;
+  $('hudPartBox').hidden = vol;
+  $('hudPartSep').hidden = vol;
+  updateGridHud();
+  qualityLabels();
 }
 for (const [val, id] of MODES) $(id).addEventListener('click', () => setMode(val));
 if (!volOK) { $('mode-volume').disabled = true; $('mode-volume').title = 'Volymläget stöds inte av den här grafikdrivern'; }
@@ -1760,10 +1883,7 @@ for (const [group, defs] of Object.entries(SLIDERS)) {
       input.style.setProperty('--fill', ((P[key] - min) / (max - min)) * 100 + '%');
     };
     input.value = P[key];
-    input.addEventListener('input', () => {
-      P[key] = parseFloat(input.value); sync();
-      if ((key === 'brush' || key === 'puffSize') && P.mode === 'volume') buildVolume();
-    });
+    input.addEventListener('input', () => { P[key] = parseFloat(input.value); sync(); });
     sync();
     g.appendChild(row);
   }
