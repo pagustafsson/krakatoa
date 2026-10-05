@@ -295,7 +295,8 @@ const SLIDERS = {
   'g-flow': [
     ['swirl', 'Virvlar', 0, 60, 1, (v) => v.toFixed(0)],
     ['turbulence', 'Turbulens', 0, 3, 0.05, (v) => v.toFixed(2)],
-    ['life', 'Livslängd', 0.3, 3, 0.05, (v) => (3.3 * v).toFixed(1) + ' s'],
+    // particles: mean particle life; Volym: how long a puff stays visible after it leaves the emitter
+    ['life', 'Livslängd', 0.3, 3, 0.05, (v) => (P.mode === 'volume' ? volLife(v) : 3.3 * v).toFixed(1) + ' s'],
   ],
   'g-render': [
     ['smoke', 'Rökfält', 0, 1.5, 0.05, (v) => v.toFixed(2)],
@@ -309,6 +310,7 @@ const SLIDERS = {
     ['lift', 'Lyftkraft', 0, 3, 0.05, (v) => '×' + v.toFixed(2)],
   ],
 };
+const sliderSync = {}; // key → refresh its output (setMode: Livslängd reads differently per mode)
 
 /* ------------------------------------------------------------------ */
 /* Shaders                                                            */
@@ -681,6 +683,9 @@ vec4 Sx(sampler2D s, vec3 p, ivec3 G, int cols, vec2 atl) {
   return mix(texture(s, a * atl), texture(s, b * atl), zf - z0);
 }
 vec4 S(sampler2D s, vec3 p) { return Sx(s, p, uG, uCols, uAtl); }
+// Open faces for the scalars: a backtrace that leaves the grid brings in clean air. Weight of the source sample at
+// p: 1 up to the outer cell centres, fading to 0 half a cell outside the face (a zero ghost cell).
+float inflow(vec3 p) { vec3 e = min(p, vec3(uG) - p); return clamp(min(min(e.x, e.y), e.z) + 0.5, 0.0, 1.0); }
 `;
 
 // Soft spherical emitters swept along this frame's stroke segments (capsules on the mid plane)
@@ -723,7 +728,8 @@ void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
   vec3 p = vec3(c) + 0.5;
   vec3 v = S(uVel, p - 0.5 * uDt * F(uVel, c).xyz).xyz;
-  o = S(uSrc, p - uDt * v);
+  vec3 b = p - uDt * v;
+  o = S(uSrc, b) * inflow(b);
 }`,
 
   // MacCormack step 2: trace the result forward again, correct by half the round-trip error, clamp to the
@@ -734,14 +740,21 @@ void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
   vec3 p = vec3(c) + 0.5;
   vec3 v = S(uVel, p - 0.5 * uDt * F(uVel, c).xyz).xyz;
-  ivec3 i0 = ivec3(floor(clamp(p - uDt * v, vec3(0.5), vec3(uG) - 0.5) - 0.5));
+  vec3 b = p - uDt * v;
+  ivec3 i0 = ivec3(floor(clamp(b, vec3(0.5), vec3(uG) - 0.5) - 0.5));
   vec4 lo = F(uSrc, i0), hi = lo;
   for (int k = 1; k < 8; k++) {
     vec4 q = F(uSrc, i0 + ivec3(k & 1, (k >> 1) & 1, k >> 2));
     lo = min(lo, q); hi = max(hi, q);
   }
+  // inflow through an open face scales the neighbourhood like it scaled hat
+  float wi = inflow(b);
+  lo *= wi; hi *= wi;
   vec4 hat = texelFetch(uHat, texOf(c), 0);
   vec4 s = clamp(hat + 0.5 * (texelFetch(uSrc, texOf(c), 0) - S(uHat, p + uDt * v)), lo, hi);
+  // The clamp cuts undershoots (mostly at 0) more than overshoots, so MacCormack gains density mass; damping its
+  // correction where it lifts density above the semi-Lagrangian value keeps the total from growing.
+  s.x = min(s.x, mix(hat.x, s.x, 0.95));
   s.xyz *= uDecay;
   vec3 rel; int bi;
   float w = brush(p, rel, bi);
@@ -1155,6 +1168,7 @@ function buildScreen() {
 // resamples the old fields into the new grid.
 const max3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
 let vol3 = null, vMarchT = null, grid2DText = '–';
+let volFail = ''; // grid that could not be built for this window ('' = the volume is ready)
 
 function make3D(w, h, d) {
   gl.activeTexture(gl.TEXTURE0);
@@ -1200,10 +1214,13 @@ if (volOK) {
 // Z slices `cols` per row, choosing the squarest layout within the texture limit.
 function grid3D(quality = P.quality) {
   const q = QUALITY[quality];
+  // Extreme window shapes (an iframe collapsing to a few px) are capped so even the s = 16 floor fits the
+  // 3D texture limit; the volume then covers the middle of the screen
+  const a = Math.min(Math.max(aspect, 1 / aspect), max3D / 16);
   let s = q.g;
   for (;;) {
     // X is a multiple of 4 (pressure is packed 4 cells per texel along x)
-    const lng = Math.round(s * Math.max(aspect, 1 / aspect));
+    const lng = Math.round(s * a);
     const [X, Y] = aspect >= 1 ? [Math.max(4, Math.round(lng / 4) * 4), s] : [Math.max(4, Math.round(s / 4) * 4), lng];
     const Z = Math.max(8, Math.round((s * q.gz) / 4) * 4);
     let cols = 0, best = Infinity;
@@ -1213,8 +1230,9 @@ function grid3D(quality = P.quality) {
       const cost = (Math.max(w, h) * c * rows) / Z;
       if (cost < best) { best = cost; cols = c; }
     }
-    if ((cols && Math.max(X, Y, Z) <= max3D && X * Y * Z <= 2.4 * q.g * q.g * q.g) || s <= 16) {
-      return cols ? { X, Y, Z, cols, AW: cols * X, AH: Math.ceil(Z / cols) * Y, PW: cols * (X >> 2) } : null;
+    const fits = cols && Math.max(X, Y, Z) <= max3D;
+    if ((fits && X * Y * Z <= 2.4 * q.g * q.g * q.g) || s <= 16) {
+      return fits ? { X, Y, Z, cols, AW: cols * X, AH: Math.ceil(Z / cols) * Y, PW: cols * (X >> 2) } : null;
     }
     s = Math.max(16, Math.floor(s * 0.9));
   }
@@ -1229,9 +1247,12 @@ function free3DSim(V) {
 function build3D() {
   if (!volOK || !cssW) return false;
   const g = grid3D();
-  if (!g) return false;
+  if (!g) return volFailed('none');
   const old = vol3;
   if (!old || old.X !== g.X || old.Y !== g.Y || old.Z !== g.Z || old.cols !== g.cols) {
+    // a grid the driver refused is not retried every frame, only when the window or quality changes
+    const key = [g.X, g.Y, g.Z, g.cols].join();
+    if (key === volFail) return false;
     const V = g;
     V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2);
     V.vel = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
@@ -1242,14 +1263,16 @@ function build3D() {
     V.pres = makeDouble(g.PW, g.AH, FMT.rgba, gl.NEAREST);
     V.den3 = make3D(g.X, g.Y, g.Z);
     V.lit3 = make3D(V.LX, V.LY, V.LZ);
+    // without its 3D targets the new grid is useless: keep the old sim, it is resampled once a size works again
+    if (!V.den3.ok || !V.lit3.ok) { free3DSim(V); return volFailed(key); }
     vol3 = V;
     if (old) {
-      // velocity is in cells/s, so it scales with the grid
-      const k = g.Y / old.Y;
-      for (const [src, dst, m] of [[old.vel, V.vel, k], [old.scal, V.scal, 1]]) {
+      // velocity is in cells/s and the resample stretches each axis by its own grid ratio
+      const kv = [g.X / old.X, g.Y / old.Y, g.Z / old.Z, 1];
+      for (const [src, dst, m] of [[old.vel, V.vel, kv], [old.scal, V.scal, [1, 1, 1, 1]]]) {
         use(pv.resample); atlasU();
         ut('uSrc', 0, src.read); ui3('uGo', old.X, old.Y, old.Z); ui('uColso', old.cols); uf('uAtlo', 1 / old.AW, 1 / old.AH);
-        uf('uMul', m, m, m, 1);
+        uf('uMul', ...m);
         draw(dst.read);
       }
       free3DSim(old);
@@ -1259,7 +1282,12 @@ function build3D() {
   }
   const q = QUALITY[P.quality];
   vMarchT = remake(vMarchT, Math.max(2, Math.round(cssW * q.rm)), Math.max(2, Math.round(cssH * q.rm)), FMT.rgba, gl.LINEAR);
+  if (volFail) { volFail = ''; updateGridHud(); }
   return true;
+}
+function volFailed(key) {
+  if (volFail !== key) { volFail = key; updateGridHud(); }
+  return false;
 }
 function clear3D() {
   if (!vol3) return;
@@ -1271,13 +1299,7 @@ function clear3D() {
   }
 }
 function updateGridHud() {
-  $('hudGrid').textContent = P.mode === 'volume' && vol3 ? vol3.X + '×' + vol3.Y + '×' + vol3.Z : grid2DText;
-}
-// True when this frame should simulate and render the volume mode (builds its targets on demand,
-// so setting krakatoaDebug.P.mode directly also works)
-function volReady() {
-  if (P.mode !== 'volume' || !volOK) return false;
-  return build3D();
+  $('hudGrid').textContent = P.mode !== 'volume' ? grid2DText : vol3 && !volFail ? vol3.X + '×' + vol3.Y + '×' + vol3.Z : '–';
 }
 
 function resize(force) {
@@ -1545,6 +1567,11 @@ function updateParticles(dt, time, frame) {
 // segments on the mid plane (z = Z/2): a held pointer gives a gentle upward jet, a moving one drags the smoke along.
 const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
 const emitRadius = () => P.brush * 1.6; // screen heights
+const V_TAU = 3.0; // density e-folding time per unit of Livslängd (s)
+// Livslängd label in Volym: seconds until a puff no longer shows (alpha < 0.05) after it leaves the emitter, measured
+// at Hög with default lift. It saturates because old smoke spreads thin and rises off screen; coarser grids fade
+// sooner (Medel about 25 %, Låg about 35 %).
+const volLife = (v) => 10.9 * (1 - Math.exp(-v / 1.72));
 function emitterUniforms() {
   ui('uN', segN); uarr('uEA', 'uniform3fv', emA); uarr('uEB', 'uniform3fv', emB);
   const r = emitRadius() * vol3.Y;
@@ -1570,7 +1597,7 @@ function step3D(dt, time) {
   use(pv.advS2); atlasU(); emitterUniforms();
   ut('uVel', 0, V.vel.read); ut('uSrc', 1, V.scal.read); ut('uHat', 2, V.tmp);
   uf('uDt', dt); uf('uTime', time); uf('uDRate', 9 * P.emission); uf('uDMax', 3); uf('uTRate', 9);
-  uf('uDecay', Math.exp(-dt / (2.4 * P.life)), Math.exp(-dt / P.coolTime), Math.exp(-dt / (2.2 * P.life)));
+  uf('uDecay', Math.exp(-dt / (V_TAU * P.life)), Math.exp(-dt / P.coolTime), Math.exp(-dt / (2.2 * P.life)));
   draw(V.scal.write); V.scal.swap();
 
   // 2. Velocity self-advection
@@ -1760,8 +1787,11 @@ function tick(dt) {
   if (!P.paused) { time += dt; updateDemo(dt); }
   const emitters = gather(dt, time);
   updateLight(dt, emitters);
-  const vol = volReady();
-  if (!P.paused) {
+  // Volym builds its targets on demand (so setting krakatoaDebug.P.mode directly also works). When they cannot
+  // be built for this window it shows its last state, frozen, and never falls back to the particle scene.
+  const volMode = P.mode === 'volume' && volOK;
+  const vol = volMode && build3D();
+  if (!P.paused && vol === volMode) {
     // Each mode simulates only its own scene; the other one stays as it was until you switch back
     if (segN) { hue += dt * 0.035; if (!vol) splat(); }
     if (vol) step3D(dt, time);
@@ -1772,8 +1802,9 @@ function tick(dt) {
   } else {
     segN = 0;
   }
-  if (vol) render3D(frame);
-  else render(frame);
+  if (!volMode) render(frame);
+  else if (vol3) render3D(frame);
+  else { gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
   frame++;
 }
 function loop(now) {
@@ -1864,6 +1895,7 @@ function setMode(m) {
   for (const id of ['t-showSmoke', 't-showParticles']) $(id).closest('label').hidden = vol;
   $('hudPartBox').hidden = vol;
   $('hudPartSep').hidden = vol;
+  if (sliderSync.life) sliderSync.life();
   updateGridHud();
   qualityLabels();
 }
@@ -1885,6 +1917,7 @@ for (const [group, defs] of Object.entries(SLIDERS)) {
     input.value = P[key];
     input.addEventListener('input', () => { P[key] = parseFloat(input.value); sync(); });
     sync();
+    sliderSync[key] = sync;
     g.appendChild(row);
   }
 }
