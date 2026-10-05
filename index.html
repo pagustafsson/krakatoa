@@ -255,7 +255,7 @@ const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
 // sim: velocity grid (short side), dye: smoke field (short side), pw×ph: particle state texture, accum: particle buffer vs CSS px
 // Volume mode only: g: 3D grid cells on the short screen side, gz: grid depth vs g, jac: pressure (Jacobi) iterations,
-// rm: ray-march buffer vs CSS px
+// rm: ray-march buffer vs CSS px (at most V_RAYS rays per grid cell)
 const QUALITY = {
   low:    { label: 'Låg',   sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, g: 56,  gz: 0.67, jac: 16, rm: 0.5 },
   medium: { label: 'Medel', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, g: 76,  gz: 0.67, jac: 20, rm: 0.6 },
@@ -645,6 +645,18 @@ void main() {
 // so each solver pass is one fullscreen draw over the atlas. Neighbours are texelFetch'ed; semi-Lagrangian
 // lookups take two hardware-bilinear taps in adjacent slices, clamped half a texel inside the tile so tiles
 // never bleed into each other. Solver units: grid cells and seconds.
+// Trilinear lookup at p (cell units, centres at +0.5) in an atlas of grid G with cols tiles per row; also used by
+// the ray march for the light atlas
+const V_SX = `
+vec4 Sx(sampler2D s, vec3 p, ivec3 G, int cols, vec2 atl) {
+  p = clamp(p, vec3(0.5), vec3(G) - 0.5);
+  float zf = p.z - 0.5, z0 = floor(zf);
+  int k0 = int(z0), k1 = min(k0 + 1, G.z - 1);
+  vec2 a = vec2(ivec2(k0 % cols, k0 / cols) * G.xy) + p.xy;
+  vec2 b = vec2(ivec2(k1 % cols, k1 / cols) * G.xy) + p.xy;
+  return mix(texture(s, a * atl), texture(s, b * atl), zf - z0);
+}
+`;
 const V_ATLAS = `
 uniform ivec3 uG;
 uniform int uCols;
@@ -673,15 +685,7 @@ vec4 PP(sampler2D s, ivec3 c) {
 float P0(sampler2D s, ivec3 c) {
   return (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, uG))) ? 0.0 : texelFetch(s, ptexOf(ivec3(c.x >> 2, c.yz)), 0)[c.x & 3];
 }
-// trilinear lookup at p (cell units, centres at +0.5) in an atlas of grid G with cols tiles per row
-vec4 Sx(sampler2D s, vec3 p, ivec3 G, int cols, vec2 atl) {
-  p = clamp(p, vec3(0.5), vec3(G) - 0.5);
-  float zf = p.z - 0.5, z0 = floor(zf);
-  int k0 = int(z0), k1 = min(k0 + 1, G.z - 1);
-  vec2 a = vec2(ivec2(k0 % cols, k0 / cols) * G.xy) + p.xy;
-  vec2 b = vec2(ivec2(k1 % cols, k1 / cols) * G.xy) + p.xy;
-  return mix(texture(s, a * atl), texture(s, b * atl), zf - z0);
-}
+${V_SX}
 vec4 S(sampler2D s, vec3 p) { return Sx(s, p, uG, uCols, uAtl); }
 // Open faces for the scalars: a backtrace that leaves the grid brings in clean air. Weight of the source sample at
 // p: 1 up to the outer cell centres, fading to 0 half a cell outside the face (a zero ghost cell).
@@ -863,13 +867,52 @@ void main() {
   o = Sx(uSrc, (vec3(c) + 0.5) / vec3(uG) * vec3(uGo), uGo, uColso, uAtlo) * uMul;
 }`,
 
+  // Light volume at half resolution, one draw over its own atlas (uLg cells per tile, uLc tiles per row; a few
+  // small layered draws would cost far more than the work in them): rgb = emitter point light × falloff ×
+  // transmittance (marched toward the emitter, stopping at its radius) + key light from above × transmittance;
+  // a = key-light transmittance.
+  light: `precision highp sampler3D;
+uniform sampler3D uDen;
+uniform ivec3 uLg; uniform int uLc;
+uniform vec3 uBox, uLp, uLcol, uKcol, uKd;
+uniform float uLRad, uFall, uExtL;
+void main() {
+  ivec2 f = ivec2(gl_FragCoord.xy), t = f / uLg.xy;
+  int k = t.y * uLc + t.x;
+  if (k >= uLg.z) { o = vec4(0.0); return; }
+  vec3 inv = 0.5 / uBox;
+  vec3 p = ((vec3(f - t * uLg.xy, k) + 0.5) / vec3(uLg) - 0.5) * 2.0 * uBox;
+  vec3 tl = uLp - p;
+  float dist = length(tl);
+  vec3 dir = tl / max(dist, 1e-4);
+  // steps grow quadratically away from the cell: fine near (soft self-shadow detail), coarse far away
+  const int N = 14;
+  float span = max(dist - uLRad, 0.0), tau = 0.0;
+  for (int i = 0; i < N; i++) {
+    float a = float(i) / float(N), b = float(i + 1) / float(N);
+    tau += texture(uDen, (p + dir * (span * 0.5 * (a * a + b * b))) * inv + 0.5).x * (b * b - a * a);
+  }
+  float Tp = exp(-tau * span * uExtL);
+  vec3 te = (sign(uKd) * uBox - p) / uKd;
+  float sk = min(min(te.x, te.y), te.z), tk = 0.0;
+  for (int i = 0; i < N; i++) {
+    float a = float(i) / float(N), b = float(i + 1) / float(N);
+    tk += texture(uDen, (p + uKd * (sk * 0.5 * (a * a + b * b))) * inv + 0.5).x * (b * b - a * a);
+  }
+  float Tk = exp(-tk * sk * uExtL);
+  o = vec4(uLcol * (Tp / (1.0 + dist * dist * uFall)) + uKcol * Tk, Tk);
+}`,
+
   // Ray march through the box: fixed camera on +z with mild perspective, the mid plane z = 0 exactly fills the
   // screen. Beer–Lambert absorption, single scattering of the light volume (+ ambient for multiple scattering),
   // emission from temperature, jittered start. rgb: premultiplied radiance, a: opacity.
-  march: COMMON + `precision highp sampler3D;
-uniform sampler3D uDen, uLit;
+  march: COMMON + V_SX + `precision highp sampler3D;
+uniform sampler3D uDen;
+uniform sampler2D uLit; uniform ivec3 uLg; uniform int uLc; uniform vec2 uLAtl;
 uniform vec3 uBox, uHot, uEmb, uAlb, uTail, uAmb, uKcol;
 uniform float uCam, uAspect, uExt, uStep, uFrameF, uEmis;
+// below this density a step's opacity is about 1e-5 or less (see d below): skip the light fetch and shading
+const float SHADE_MIN = 0.01;
 void main() {
   vec3 ro = vec3(0.0, 0.0, uCam);
   vec3 rd = normalize(vec3((vUv.x - 0.5) * uAspect, vUv.y - 0.5, -uCam));
@@ -886,13 +929,13 @@ void main() {
       if (t >= tf) break;
       vec3 u = (ro + rd * t) * inv + 0.5;
       vec4 s = texture(uDen, u);
-      if (s.x > 1e-3) {
+      if (s.x > SHADE_MIN) {
         vec3 e = min(u, 1.0 - u) * uBox;
         float hot = smoothstep(0.1, 0.9, s.y);
         // hot gas is thin and glowing; thin haze fades out faster than dense smoke (crisper wisps); fade at the box faces
         float d = s.x * (1.0 - 0.55 * hot) * smoothstep(0.0, 0.3, s.x) * smoothstep(0.0, 0.04, min(min(e.x, e.y), e.z));
         float a = 1.0 - exp(-d * uExt * uStep);
-        vec4 L = texture(uLit, u);
+        vec4 L = Sx(uLit, u * vec3(uLg), uLg, uLc, uLAtl);
         vec3 alb = mix(uTail, uAlb, s.z) * (1.0 - 0.75 * hot);
         // key light (single scattering) reads a little paler than the deep, saturated ambient/glow-lit smoke
         vec3 key = uKcol * L.a;
@@ -923,17 +966,15 @@ void main() {
 }`,
 };
 
-// Passes that write MRT layers of a TEXTURE_3D (no gl_Layer in WebGL2): each draw attaches V_MRT consecutive
+// The density copy into a TEXTURE_3D writes MRT layers (no gl_Layer in WebGL2): each draw attaches n consecutive
 // layers starting at uL0, and at(k) computes layer k at this fragment.
-const V_MRT = 4;
-function fsLayers(body) {
+function fsLayers(body, n) {
   let outs = '', calls = '';
-  for (let j = 0; j < V_MRT; j++) { outs += `layout(location = ${j}) out vec4 o${j};\n`; calls += `  o${j} = at(uL0 + ${j});\n`; }
+  for (let j = 0; j < n; j++) { outs += `layout(location = ${j}) out vec4 o${j};\n`; calls += `  o${j} = at(uL0 + ${j});\n`; }
   return `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
-precision highp sampler3D;
 ${outs}uniform int uL0;
 ${body}
 void main() {
@@ -942,34 +983,6 @@ ${calls}}`;
 // Scalar atlas → TEXTURE_3D (hardware trilinear for the light pass and the ray march)
 const V_TO3D = `uniform sampler2D uSrc; uniform ivec3 uG; uniform int uCols;
 vec4 at(int k) { k = min(k, uG.z - 1); return texelFetch(uSrc, ivec2(k % uCols, k / uCols) * uG.xy + ivec2(gl_FragCoord.xy), 0); }`;
-// Light volume at half resolution: rgb = emitter point light × falloff × transmittance (marched toward the
-// emitter, stopping at its radius) + key light from above × transmittance; a = key-light transmittance.
-const V_LIGHT = `uniform sampler3D uDen;
-uniform vec3 uLres, uBox, uLp, uLcol, uKcol, uKd;
-uniform float uLRad, uFall, uExtL;
-vec4 at(int k) {
-  vec3 inv = 0.5 / uBox;
-  vec3 p = (vec3(gl_FragCoord.xy, float(k) + 0.5) / uLres - 0.5) * 2.0 * uBox;
-  vec3 tl = uLp - p;
-  float dist = length(tl);
-  vec3 dir = tl / max(dist, 1e-4);
-  // steps grow quadratically away from the cell: fine near (soft self-shadow detail), coarse far away
-  const int N = 14;
-  float span = max(dist - uLRad, 0.0), tau = 0.0;
-  for (int i = 0; i < N; i++) {
-    float a = float(i) / float(N), b = float(i + 1) / float(N);
-    tau += texture(uDen, (p + dir * (span * 0.5 * (a * a + b * b))) * inv + 0.5).x * (b * b - a * a);
-  }
-  float Tp = exp(-tau * span * uExtL);
-  vec3 te = (sign(uKd) * uBox - p) / uKd;
-  float sk = min(min(te.x, te.y), te.z), tk = 0.0;
-  for (int i = 0; i < N; i++) {
-    float a = float(i) / float(N), b = float(i + 1) / float(N);
-    tk += texture(uDen, (p + uKd * (sk * 0.5 * (a * a + b * b))) * inv + 0.5).x * (b * b - a * a);
-  }
-  float Tk = exp(-tk * sk * uExtL);
-  return vec4(uLcol * (Tp / (1.0 + dist * dist * uFall)) + uKcol * Tk, Tk);
-}`;
 
 /* ------------------------------------------------------------------ */
 /* GL plumbing                                                        */
@@ -1013,8 +1026,6 @@ let volOK = true;
 const pv = {};
 try {
   for (const k of Object.keys(VFS)) pv[k] = program(VS_QUAD, FH + VFS[k]);
-  pv.to3d = program(VS_QUAD, fsLayers(V_TO3D));
-  pv.light = program(VS_QUAD, fsLayers(V_LIGHT));
 } catch (err) {
   console.error('Volymläget är avstängt:', err);
   volOK = false;
@@ -1163,14 +1174,22 @@ function buildScreen() {
   if (!bloomLv.length) bloomLv.push(makeFBO(Math.max(1, w), Math.max(1, h), FMT.rgba, gl.LINEAR));
 }
 // Volume mode targets: the solver atlases (velocity; scalars = density, temperature, freshness; curl; divergence;
-// pressure), TEXTURE_3D copies for rendering (density + half-res light volume) and the reduced-res ray-march layer.
-// Built on first use and kept in particle mode, so a mode round trip keeps the scene. A resize or quality change
-// resamples the old fields into the new grid.
+// pressure), a TEXTURE_3D copy of the scalars for rendering, the half-res light atlas and the reduced-res ray-march
+// layer.
+// Built on first use and kept in particle mode, so a mode round trip keeps the scene. A resize, quality change or
+// governor step resamples the old fields into the new grid.
 const max3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
 let vol3 = null, vMarchT = null, grid2DText = '–';
 let volFail = ''; // grid that could not be built for this window ('' = the volume is ready)
+const V_RAYS = 6; // ray-march rays per grid cell; more add no detail (comp's tent filter smooths them anyway)
+// Volym's QUALITY row: the Kvalitet select, minus the rows the frame-rate governor has stepped down (governVolume),
+// never below Låg. The governor changes only this, never P.quality or the particle mode.
+const QKEYS = Object.keys(QUALITY);
+let volDrop = 0;
+const gov = { slow: 0, wait: 0 }; // s spent under VOL_FPS, s until the next step is allowed
+const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
-function make3D(w, h, d) {
+function make3D(w, h, d, n = vMRT) {
   gl.activeTexture(gl.TEXTURE0);
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_3D, tex);
@@ -1183,11 +1202,11 @@ function make3D(w, h, d) {
   gl.bindTexture(gl.TEXTURE_3D, null);
   const fbos = [];
   let ok = true;
-  for (let z0 = 0; z0 < d; z0 += V_MRT) {
+  for (let z0 = 0; z0 < d; z0 += n) {
     const fbo = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     const bufs = [];
-    for (let j = 0; j < V_MRT; j++) {
+    for (let j = 0; j < n; j++) {
       if (z0 + j < d) { gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + j, tex, 0, z0 + j); bufs.push(gl.COLOR_ATTACHMENT0 + j); }
       else bufs.push(gl.NONE);
     }
@@ -1203,16 +1222,34 @@ function make3D(w, h, d) {
   return { tex, w, h, d, fbos, ok };
 }
 function free3DTex(t) { if (t) { gl.deleteTexture(t.tex); for (const f of t.fbos) gl.deleteFramebuffer(f.fbo); } }
-// The renderer needs layered draws into a filterable RGBA16F TEXTURE_3D; without them volume mode is unavailable
+// The renderer needs layered draws into a filterable RGBA16F TEXTURE_3D; without them volume mode is unavailable.
+// The density copy attaches 8 layers per draw where the GPU allows it (half the nearly empty passes of 4).
+let vMRT = 0;
 if (volOK) {
-  const t = make3D(4, 4, 4);
-  if (!t.ok || max3D < 128) { console.error('Volymläget är avstängt: kan inte rendera till 3D-texturer.'); volOK = false; P.mode = 'particles'; }
-  free3DTex(t);
+  const n8 = Math.min(gl.getParameter(gl.MAX_DRAW_BUFFERS), gl.getParameter(gl.MAX_COLOR_ATTACHMENTS)) >= 8;
+  for (const n of n8 ? [8, 4] : [4]) {
+    const t = make3D(4, 4, n, n), ok = t.ok;
+    free3DTex(t);
+    if (!ok) continue;
+    try { pv.to3d = program(VS_QUAD, fsLayers(V_TO3D, n)); vMRT = n; break; } catch (err) { console.error(err); }
+  }
+  if (!vMRT || max3D < 128) { console.error('Volymläget är avstängt: kan inte rendera till 3D-texturer.'); volOK = false; P.mode = 'particles'; }
 }
 
+// Tiles per row for an atlas of Z slices of X×Y: the squarest layout within the texture limit (0 if none fits)
+function tileCols(X, Y, Z) {
+  let cols = 0, best = Infinity;
+  for (let c = 1; c <= Z; c++) {
+    const rows = Math.ceil(Z / c), w = c * X, h = rows * Y;
+    if (w > maxTex || h > maxTex) continue;
+    const cost = (Math.max(w, h) * c * rows) / Z;
+    if (cost < best) { best = cost; cols = c; }
+  }
+  return cols;
+}
 // 3D grid for the current window: q.g cubic cells on the short screen side, depth q.gz × that. The atlas packs the
-// Z slices `cols` per row, choosing the squarest layout within the texture limit.
-function grid3D(quality = P.quality) {
+// Z slices `cols` per row.
+function grid3D(quality = volLevel()) {
   const q = QUALITY[quality];
   // Extreme window shapes (an iframe collapsing to a few px) are capped so even the s = 16 floor fits the
   // 3D texture limit; the volume then covers the middle of the screen
@@ -1223,13 +1260,7 @@ function grid3D(quality = P.quality) {
     const lng = Math.round(s * a);
     const [X, Y] = aspect >= 1 ? [Math.max(4, Math.round(lng / 4) * 4), s] : [Math.max(4, Math.round(s / 4) * 4), lng];
     const Z = Math.max(8, Math.round((s * q.gz) / 4) * 4);
-    let cols = 0, best = Infinity;
-    for (let c = 1; c <= Z; c++) {
-      const rows = Math.ceil(Z / c), w = c * X, h = rows * Y;
-      if (w > maxTex || h > maxTex) continue;
-      const cost = (Math.max(w, h) * c * rows) / Z;
-      if (cost < best) { best = cost; cols = c; }
-    }
+    const cols = tileCols(X, Y, Z);
     const fits = cols && Math.max(X, Y, Z) <= max3D;
     if ((fits && X * Y * Z <= 2.4 * q.g * q.g * q.g) || s <= 16) {
       return fits ? { X, Y, Z, cols, AW: cols * X, AH: Math.ceil(Z / cols) * Y, PW: cols * (X >> 2) } : null;
@@ -1242,7 +1273,7 @@ function ut3(n, unit, t) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(
 function atlasU() { const V = vol3; ui3('uG', V.X, V.Y, V.Z); ui3('uGp', V.X >> 2, V.Y, V.Z); ui('uCols', V.cols); uf('uAtl', 1 / V.AW, 1 / V.AH); }
 function free3DSim(V) {
   freeDouble(V.vel); freeDouble(V.scal); freeFBO(V.tmp); freeFBO(V.curl); freeFBO(V.div); freeDouble(V.pres);
-  free3DTex(V.den3); free3DTex(V.lit3);
+  free3DTex(V.den3); freeFBO(V.lit);
 }
 function build3D() {
   if (!volOK || !cssW) return false;
@@ -1254,7 +1285,7 @@ function build3D() {
     const key = [g.X, g.Y, g.Z, g.cols].join();
     if (key === volFail) return false;
     const V = g;
-    V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2);
+    V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2); V.LC = tileCols(V.LX, V.LY, V.LZ);
     V.vel = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
     V.scal = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
     V.tmp = makeFBO(g.AW, g.AH, FMT.rgba, gl.LINEAR);
@@ -1262,9 +1293,9 @@ function build3D() {
     V.div = makeFBO(g.PW, g.AH, FMT.rgba, gl.NEAREST);
     V.pres = makeDouble(g.PW, g.AH, FMT.rgba, gl.NEAREST);
     V.den3 = make3D(g.X, g.Y, g.Z);
-    V.lit3 = make3D(V.LX, V.LY, V.LZ);
-    // without its 3D targets the new grid is useless: keep the old sim, it is resampled once a size works again
-    if (!V.den3.ok || !V.lit3.ok) { free3DSim(V); return volFailed(key); }
+    V.lit = V.LC ? makeFBO(V.LC * V.LX, Math.ceil(V.LZ / V.LC) * V.LY, FMT.rgba, gl.LINEAR) : null;
+    // without its render targets the new grid is useless: keep the old sim, it is resampled once a size works again
+    if (!V.den3.ok || !V.lit) { free3DSim(V); return volFailed(key); }
     vol3 = V;
     if (old) {
       // velocity is in cells/s and the resample stretches each axis by its own grid ratio
@@ -1280,8 +1311,10 @@ function build3D() {
     updateGridHud();
     qualityLabels();
   }
-  const q = QUALITY[P.quality];
-  vMarchT = remake(vMarchT, Math.max(2, Math.round(cssW * q.rm)), Math.max(2, Math.round(cssH * q.rm)), FMT.rgba, gl.LINEAR);
+  // march buffer: q.rm × CSS px, capped at V_RAYS rays per grid cell so big windows stop paying for extra rays
+  // (Y is the grid's cell count along the screen height in both orientations)
+  const rm = Math.min(QUALITY[volLevel()].rm, (V_RAYS * vol3.Y) / cssH);
+  vMarchT = remake(vMarchT, Math.max(2, Math.round(cssW * rm)), Math.max(2, Math.round(cssH * rm)), FMT.rgba, gl.LINEAR);
   if (volFail) { volFail = ''; updateGridHud(); }
   return true;
 }
@@ -1307,6 +1340,7 @@ function resize(force) {
   const d = Math.min(window.devicePixelRatio || 1, 2);
   if (!force && w === cssW && h === cssH && d === dpr) return;
   cssW = w; cssH = h; dpr = d; aspect = w / h;
+  gov.slow = 0;
   canvas.width = Math.max(1, Math.round(w * d));
   canvas.height = Math.max(1, Math.round(h * d));
   buildSim();
@@ -1578,7 +1612,7 @@ function emitterUniforms() {
   uf('uRad2', r * r);
 }
 function step3D(dt, time) {
-  const V = vol3, Y = V.Y, q = QUALITY[P.quality];
+  const V = vol3, Y = V.Y, q = QUALITY[volLevel()];
   const gx = (u) => (u - 0.5) * aspect * Y + V.X / 2;
   const kv = (0.7 * P.force * Y) / (cssH * Math.max(dt, 1e-3)), vmax = 1.5 * Y;
   for (let i = 0; i < segN; i++) {
@@ -1727,7 +1761,7 @@ function render3D(frame) {
   const V = vol3;
   const box = [V.X / V.Y / 2, 0.5, V.Z / V.Y / 2];
 
-  // 1. Scalar atlas → TEXTURE_3D (hardware trilinear for the passes below)
+  // 1. Scalar atlas → TEXTURE_3D (hardware trilinear for the passes below), vMRT layers per draw
   use(pv.to3d);
   ut('uSrc', 0, V.scal.read); ui3('uG', V.X, V.Y, V.Z); ui('uCols', V.cols);
   for (const f of V.den3.fbos) { ui('uL0', f.z0); draw(f); }
@@ -1738,22 +1772,25 @@ function render3D(frame) {
   const lc = [0, 1, 2].map((i) => (hc[i] + pal.ember[i]) * 0.5 * lp);
   use(pv.light);
   ut3('uDen', 5, V.den3);
-  uf('uLres', V.LX, V.LY, V.LZ); uf('uBox', ...box);
+  ui3('uLg', V.LX, V.LY, V.LZ); ui('uLc', V.LC); uf('uBox', ...box);
   uf('uLp', (light.x - 0.5) * aspect, light.y - 0.5, 0); uf('uLRad', emitRadius());
   uf('uFall', 26); uf('uExtL', V_EXT * 3.0 * P.shadows);
   const keyC = pal.keyC.map((v) => v * P.light);
   uf('uLcol', ...lc); uf('uKcol', ...keyC); uf('uKd', ...V_KEY);
-  for (const f of V.lit3.fbos) { ui('uL0', f.z0); draw(f); }
+  draw(V.lit);
 
   // 3. Ray march at reduced resolution
   use(pv.march);
-  ut3('uDen', 5, V.den3); ut3('uLit', 6, V.lit3);
+  ut3('uDen', 5, V.den3);
+  ut('uLit', 6, V.lit); ui3('uLg', V.LX, V.LY, V.LZ); ui('uLc', V.LC); uf('uLAtl', V.lit.tx, V.lit.ty);
   uf('uBox', ...box); uf('uCam', V_CAM); uf('uAspect', aspect); uf('uExt', V_EXT); uf('uStep', 1 / V.Y);
   uf('uFrameF', frame % 64); uf('uEmis', 2.5);
   uf('uHot', ...hc); uf('uEmb', ...pal.ember); uf('uAlb', ...pal.alb); uf('uTail', ...pal.tail);
   uf('uAmb', ...pal.amb.map((v) => v * P.light)); uf('uKcol', ...keyC);
   draw(vMarchT);
-  for (const u of [5, 6]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_3D, null); }
+  // unbind, so next frame's copy and light pass never render into a texture that is still bound
+  gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_3D, null);
+  gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, null);
 
   // 4. Composite over the background into the HDR scene, then the shared bloom + tonemap
   use(pv.comp);
@@ -1782,6 +1819,19 @@ function clearAll() {
 /* Loop                                                               */
 /* ------------------------------------------------------------------ */
 let last = performance.now(), time = 0, frame = 0, fpsEMA = 60, hudT = 0;
+// Volym's frame-rate governor: when the frame rate stays under VOL_FPS for 2 s, the volume grid steps down one
+// QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. Picking a quality
+// starts over from that row; a mode switch or resize restarts the 2 s window (the frames around it are slow anyway).
+const VOL_FPS = 50;
+function governVolume(el) {
+  gov.wait = Math.max(0, gov.wait - el);
+  if (P.mode !== 'volume' || !vol3 || volFail || P.paused || fpsEMA >= VOL_FPS) { gov.slow = 0; return; }
+  gov.slow += el;
+  if (gov.slow < 2 || gov.wait > 0 || volLevel() === QKEYS[0]) return;
+  volDrop++;
+  gov.slow = 0; gov.wait = 3;
+  qualityLabels();
+}
 function tick(dt) {
   resize(false);
   if (!P.paused) { time += dt; updateDemo(dt); }
@@ -1809,11 +1859,13 @@ function tick(dt) {
 }
 function loop(now) {
   requestAnimationFrame(loop);
-  const dt = Math.min(Math.max((now - last) / 1000, 0.001), 1 / 30);
+  const el = (now - last) / 1000;
+  const dt = Math.min(Math.max(el, 0.001), 1 / 30);
   last = now;
   tick(dt);
   fpsEMA += (1 / Math.max((now - (loop.prev || now - 16.7)) / 1000, 1e-3) - fpsEMA) * 0.05;
   loop.prev = now;
+  governVolume(Math.min(Math.max(el, 0), 0.25));
   if ((hudT += dt) > 0.5) { hudT = 0; $('hudFps').textContent = Math.round(fpsEMA); }
 }
 // Test hook: advance the simulation a fixed number of frames synchronously, independent of
@@ -1825,6 +1877,7 @@ window.krakatoaDebug = {
   setMode: (m) => setMode(m),
   get volumeOK() { return volOK; },
   get grid3D() { return vol3 ? [vol3.X, vol3.Y, vol3.Z, vol3.AW, vol3.AH] : null; },
+  get volQuality() { return volLevel(); }, // the QUALITY row Volym runs (the select minus the governor's steps)
 };
 
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('Grafikkontexten tappades. Ladda om sidan för att starta igen.'); });
@@ -1867,17 +1920,24 @@ for (const [k, q] of Object.entries(QUALITY)) {
   qSel.appendChild(o);
 }
 const qLabels = [...qSel.options].map((o) => o.textContent);
-// Volym lists the 3D grid each quality gives for the current window shape instead of the particle count
+// Volym lists the 3D grid each quality gives for the current window shape instead of the particle count, and
+// says when the frame-rate governor runs a lower row than the one selected (the HUD shows the grid it runs)
 function qualityLabels() {
+  const vol = P.mode === 'volume';
   [...qSel.options].forEach((o, i) => {
-    const g = P.mode === 'volume' && cssW ? grid3D(o.value) : null;
+    const g = vol && cssW ? grid3D(o.value) : null;
     o.textContent = g ? `${QUALITY[o.value].label} · ${g.X}×${g.Y}×${g.Z}` : qLabels[i];
   });
+  const info = $('qualityInfo'), lowered = vol && volLevel() !== P.quality;
+  info.textContent = lowered ? 'sänkt till ' + QUALITY[volLevel()].label : '';
+  info.title = lowered ? 'Bildfrekvensen var för låg, så Volym kör ett grövre 3D-grid än det valda' : '';
 }
 qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
+  volDrop = 0; gov.slow = 0; gov.wait = 0;
   buildSim(); buildParticles(); buildScreen();
+  qualityLabels();
 });
 
 // Läge: Partiklar (fine additive particle smoke) / Volym (ray-marched 3D smoke solver). The 3D targets are built
@@ -1896,6 +1956,7 @@ function setMode(m) {
   $('hudPartBox').hidden = vol;
   $('hudPartSep').hidden = vol;
   if (sliderSync.life) sliderSync.life();
+  gov.slow = 0;
   updateGridHud();
   qualityLabels();
 }
