@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="sv">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -137,6 +137,12 @@ input[type=range]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--
   font: 500 12px var(--font-ui);
 }
 .actions button:hover { background: rgba(255,255,255,0.08); }
+.reset {
+  align-self: center; margin-top: -6px; padding: 2px 6px; border: 0; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--ink-faint); font: 400 11px var(--font-ui); transition: color .15s;
+}
+.reset:hover { color: var(--ink-dim); }
+.reset:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; color: var(--ink-dim); }
 kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
 
 .hud {
@@ -170,63 +176,64 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
 </head>
 <body>
 
-<canvas id="gl" tabindex="-1" aria-label="Rökfält. Håll nere musknappen och dra för att släppa ut färgad partikelrök."></canvas>
+<canvas id="gl" tabindex="-1" aria-label="Drawing area. Hold down the mouse button and drag."></canvas>
 
 <div class="rail">
-  <button class="iconbtn" id="panelToggle" type="button" aria-expanded="true" aria-controls="panel" title="Inställningar (H)">
+  <button class="iconbtn" id="panelToggle" type="button" aria-expanded="true" aria-controls="panel" title="Settings (H)">
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d="M2 4h7M12 4h2M2 12h2M7 12h7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
       <circle cx="10.5" cy="4" r="1.6" stroke="currentColor" stroke-width="1.4" fill="none"/>
       <circle cx="5.5" cy="12" r="1.6" stroke="currentColor" stroke-width="1.4" fill="none"/>
     </svg>
   </button>
-  <aside class="panel" id="panel" aria-label="Inställningar">
+  <aside class="panel" id="panel" aria-label="Settings">
     <header class="brand">
       <div class="wordmark">KRAKATOA</div>
-      <div class="sub">Partikelrök i realtid · WebGL2</div>
+      <div class="sub">Real-time smoke · WebGL2</div>
     </header>
 
     <section class="group">
-      <div class="ghead"><span id="modeLabel">Läge</span><span class="gval"><kbd>M</kbd></span></div>
+      <div class="ghead"><span id="modeLabel">Effect</span><span class="gval"><kbd>M</kbd></span></div>
       <div class="seg" role="group" aria-labelledby="modeLabel">
-        <button type="button" id="mode-particles" aria-pressed="true">Partiklar</button>
-        <button type="button" id="mode-volume" aria-pressed="false">Volym</button>
+        <button type="button" id="mode-particles" aria-pressed="true"></button>
+        <button type="button" id="mode-volume" aria-pressed="false"></button>
       </div>
     </section>
 
     <section class="group">
-      <div class="ghead"><span>Palett</span><span class="gval" id="paletteName">Aurora</span></div>
+      <div class="ghead"><span>Palette</span><span class="gval" id="paletteName">Aurora</span></div>
       <div class="swatches" id="swatches"></div>
     </section>
 
     <section class="group">
-      <div class="ghead"><label for="quality">Kvalitet</label><span class="gval" id="qualityInfo"></span></div>
+      <div class="ghead"><label for="quality">Quality</label><span class="gval" id="qualityInfo"></span></div>
       <select id="quality"></select>
     </section>
 
-    <section class="group" id="g-brush"><div class="ghead"><span>Pensel</span></div></section>
-    <section class="group" id="g-flow"><div class="ghead"><span>Flöde</span></div></section>
-    <section class="group" id="g-render"><div class="ghead"><span>Ljus och rendering</span></div></section>
-    <section class="group" id="g-volume"><div class="ghead"><span>Volym</span></div></section>
+    <section class="group" id="g-brush"><div class="ghead"><span>Brush</span></div></section>
+    <section class="group" id="g-flow"><div class="ghead"><span>Flow</span></div></section>
+    <section class="group" id="g-render"><div class="ghead"><span>Light and rendering</span></div></section>
+    <section class="group" id="g-volume"><div class="ghead"><span>Heat</span></div></section>
 
     <section class="group toggles">
-      <div class="ghead"><span>Lager</span></div>
-      <label class="switch" for="t-showSmoke"><span>Rökfält</span><input type="checkbox" id="t-showSmoke"></label>
-      <label class="switch" for="t-showParticles"><span>Partiklar</span><input type="checkbox" id="t-showParticles"></label>
-      <label class="switch" for="t-cursorLight"><span>Ljuset följer pekaren</span><input type="checkbox" id="t-cursorLight"></label>
+      <div class="ghead"><span>Layers</span></div>
+      <label class="switch" for="t-showSmoke"><span>Smoke field</span><input type="checkbox" id="t-showSmoke"></label>
+      <label class="switch" for="t-showParticles"><span>Particles</span><input type="checkbox" id="t-showParticles"></label>
+      <label class="switch" for="t-cursorLight"><span>Light follows pointer</span><input type="checkbox" id="t-cursorLight"></label>
       <label class="switch" for="t-auto"><span>Autopilot</span><input type="checkbox" id="t-auto"></label>
     </section>
 
     <div class="actions">
-      <button type="button" id="btnClear">Rensa <kbd>C</kbd></button>
-      <button type="button" id="btnPause">Pausa <kbd>Space</kbd></button>
+      <button type="button" id="btnClear">Clear <kbd>C</kbd></button>
+      <button type="button" id="btnPause">Pause <kbd>Space</kbd></button>
     </div>
+    <button type="button" class="reset" id="btnReset"></button>
   </aside>
 </div>
 
-<div class="hud" id="hud"><span id="hudPartBox"><b id="hudParticles">–</b> partiklar</span><span id="hudPartSep">·</span><span>grid <b id="hudGrid">–</b></span><span>·</span><span><b id="hudFps">–</b> fps</span></div>
-<div class="hint" id="hint">Håll nere musknappen och dra</div>
-<div class="fail" id="fail" hidden><div><h1>Rökfältet kunde inte starta</h1><p></p></div></div>
+<div class="hud" id="hud"><span id="hudPartBox"><b id="hudParticles">–</b> particles</span><span id="hudPartSep">·</span><span>grid <b id="hudGrid">–</b></span><span>·</span><span><b id="hudFps">–</b> fps</span></div>
+<div class="hint" id="hint">Hold down the mouse button and drag</div>
+<div class="fail" id="fail" hidden><div><h1>Krakatoa couldn't start</h1><p></p></div></div>
 
 <script>
 (() => {
@@ -239,9 +246,9 @@ const gl = canvas.getContext('webgl2', {
   alpha: false, depth: false, stencil: false, antialias: false,
   preserveDrawingBuffer: false, powerPreference: 'high-performance',
 });
-if (!gl) { fail('Webbläsaren saknar WebGL2. Öppna sidan i en aktuell version av Chrome, Safari, Edge eller Firefox.'); return; }
+if (!gl) { fail("This browser doesn't support WebGL2. Open the page in a current version of Chrome, Safari, Edge or Firefox."); return; }
 if (!gl.getExtension('EXT_color_buffer_float')) {
-  fail('Grafikkortet kan inte rendera till flyttalstexturer (EXT_color_buffer_float saknas). Vätskesimuleringen behöver det.');
+  fail("This graphics card can't render to floating-point textures (EXT_color_buffer_float is missing). The simulation needs them.");
   return;
 }
 gl.getExtension('OES_texture_float_linear');
@@ -257,10 +264,10 @@ const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 // Volume mode only: g: 3D grid cells on the short screen side, gz: grid depth vs g, jac: pressure (Jacobi) iterations,
 // rm: ray-march buffer vs CSS px (at most V_RAYS rays per grid cell)
 const QUALITY = {
-  low:    { label: 'Låg',   sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, g: 56,  gz: 0.67, jac: 16, rm: 0.5 },
-  medium: { label: 'Medel', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, g: 76,  gz: 0.67, jac: 20, rm: 0.6 },
-  high:   { label: 'Hög',   sim: 160, dye: 1024, pw: 2048, ph: 1024, accum: 1.0, g: 112, gz: 0.67, jac: 28, rm: 0.75 },
-  ultra:  { label: 'Ultra', sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0, g: 128, gz: 0.67, jac: 30, rm: 0.9 },
+  low:    { label: 'Low',    sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, g: 56,  gz: 0.67, jac: 16, rm: 0.5 },
+  medium: { label: 'Medium', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, g: 76,  gz: 0.67, jac: 20, rm: 0.6 },
+  high:   { label: 'High',   sim: 160, dye: 1024, pw: 2048, ph: 1024, accum: 1.0, g: 112, gz: 0.67, jac: 28, rm: 0.75 },
+  ultra:  { label: 'Ultra',  sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0, g: 128, gz: 0.67, jac: 30, rm: 0.9 },
 };
 
 // hot = colour at emission (cycles while you draw), cool = colour the smoke ages into
@@ -269,12 +276,16 @@ const PALETTES = [
   { name: 'Aurora',   hot: ['#d6ff3c', '#4dffa0', '#24e4ff', '#9cff4a'], cool: '#1a3bff', key: '#2c4cff', bg: ['#010207', '#041026'], ember: '#7aff30', smoke: '#2f5cff', tail: '#2a30e0' },
   { name: 'Nebula',   hot: ['#ff2fa2', '#ff4d6d', '#c43cff', '#ff6fd6'], cool: '#1c88ff', key: '#5a2cff', bg: ['#030107', '#14062e'], ember: '#b03cff', smoke: '#3a8cff', tail: '#3a28b8' },
   { name: 'Magma',    hot: ['#fff09a', '#ffb03c', '#ff651c', '#ffd25a'], cool: '#7c0e1e', key: '#ff4a24', bg: ['#040202', '#1a0605'], ember: '#ff4810', smoke: '#8a8d94', tail: '#36373c' },
-  { name: 'Spektrum', hot: ['#ff3b5c', '#ffd33b', '#3bffb2', '#3b8cff'], cool: '#4a1fb0', key: '#5b3cff', bg: ['#030308', '#0c0a22'], ember: '#ff3bd0', smoke: '#7050e0', tail: '#30188a' },
-  { name: 'Aska',     hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'], ember: '#ff7a2c', smoke: '#a4acbc', tail: '#464b58' },
+  { name: 'Spectrum', hot: ['#ff3b5c', '#ffd33b', '#3bffb2', '#3b8cff'], cool: '#4a1fb0', key: '#5b3cff', bg: ['#030308', '#0c0a22'], ember: '#ff3bd0', smoke: '#7050e0', tail: '#30188a' },
+  { name: 'Ash',      hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'], ember: '#ff7a2c', smoke: '#a4acbc', tail: '#464b58' },
 ];
 
+// The effects' names on screen. P.mode keeps the internal values (also in storage and the debug hook), so renaming an
+// effect is a change here only.
+const MODE_LABEL = { particles: 'Lava', volume: 'Smoke' };
+
 const P = {
-  mode: 'particles', // 'particles' = fine additive particle smoke, 'volume' = ray-marched 3D smoke solver
+  mode: 'particles', // 'particles' (Lava) = fine additive particle smoke, 'volume' (Smoke) = ray-marched 3D smoke solver
   coolTime: 0.5, lift: 1.0,
   quality: coarse ? 'medium' : 'high',
   palette: 0,
@@ -288,29 +299,79 @@ if (QUALITY[P.quality].pw > maxTex) P.quality = 'medium';
 
 const SLIDERS = {
   'g-brush': [
-    ['brush', 'Storlek', 0.012, 0.08, 0.001, (v) => (v * 100).toFixed(1) + ' %'],
-    ['emission', 'Utsläpp', 0.2, 2.5, 0.05, (v) => '×' + v.toFixed(2)],
-    ['force', 'Kraft', 0.2, 2.5, 0.05, (v) => '×' + v.toFixed(2)],
+    ['brush', 'Size', 0.012, 0.08, 0.001, (v) => (v * 100).toFixed(1) + '%'],
+    ['emission', 'Amount', 0.2, 2.5, 0.05, (v) => '×' + v.toFixed(2)],
+    ['force', 'Force', 0.2, 2.5, 0.05, (v) => '×' + v.toFixed(2)],
   ],
   'g-flow': [
-    ['swirl', 'Virvlar', 0, 60, 1, (v) => v.toFixed(0)],
-    ['turbulence', 'Turbulens', 0, 3, 0.05, (v) => v.toFixed(2)],
-    // particles: mean particle life; Volym: how long smoke stays visible after it leaves the emitter (volLife)
-    ['life', 'Livslängd', 0.3, 3, 0.05, (v) => (P.mode === 'volume' ? volLife(v) : 3.3 * v).toFixed(1) + ' s'],
+    ['swirl', 'Swirl', 0, 60, 1, (v) => v.toFixed(0)],
+    ['turbulence', 'Turbulence', 0, 3, 0.05, (v) => v.toFixed(2)],
+    // Lava: mean particle life; Smoke: how long smoke stays visible after it leaves the emitter (volLife)
+    ['life', 'Lifetime', 0.3, 3, 0.05, (v) => (P.mode === 'volume' ? volLife(v) : 3.3 * v).toFixed(1) + ' s'],
   ],
   'g-render': [
-    ['smoke', 'Rökfält', 0, 1.5, 0.05, (v) => v.toFixed(2)],
-    ['particles', 'Partikeltäthet', 0, 3, 0.05, (v) => v.toFixed(2)],
-    ['light', 'Ljus', 0, 3, 0.05, (v) => v.toFixed(2)],
-    ['shadows', 'Skuggor', 0, 3, 0.05, (v) => v.toFixed(2)],
-    ['bloom', 'Glöd', 0, 2, 0.05, (v) => v.toFixed(2)],
+    ['smoke', 'Smoke field', 0, 1.5, 0.05, (v) => v.toFixed(2)],
+    ['particles', 'Particle density', 0, 3, 0.05, (v) => v.toFixed(2)],
+    ['light', 'Light', 0, 3, 0.05, (v) => v.toFixed(2)],
+    ['shadows', 'Shadows', 0, 3, 0.05, (v) => v.toFixed(2)],
+    ['bloom', 'Glow', 0, 2, 0.05, (v) => v.toFixed(2)],
   ],
   'g-volume': [
-    ['coolTime', 'Avsvalning', 0.15, 2, 0.05, (v) => v.toFixed(2).replace('.', ',') + ' s'],
-    ['lift', 'Lyftkraft', 0, 3, 0.05, (v) => '×' + v.toFixed(2)],
+    ['coolTime', 'Cooling', 0.15, 2, 0.05, (v) => v.toFixed(2) + ' s'],
+    ['lift', 'Lift', 0, 3, 0.05, (v) => '×' + v.toFixed(2)],
   ],
 };
-const sliderSync = {}; // key → refresh its output (setMode: Livslängd reads differently per mode)
+const sliderSync = {}; // key → refresh its output (setMode: Lifetime reads differently per effect)
+
+// Each effect keeps its own settings. These keys of P belong to the effect that runs; the other effect's are parked
+// in fx, and each effect's are saved to localStorage under its own key (krakatoa.settings.particles / .volume). The
+// rest of P is global: mode and auto (saved apart), paused (never saved). Both effects start from today's defaults.
+const FX_KEYS = ['brush', 'emission', 'force', 'swirl', 'turbulence', 'life', 'smoke', 'particles', 'light', 'shadows', 'bloom',
+  'coolTime', 'lift', 'palette', 'quality', 'showSmoke', 'showParticles', 'cursorLight'];
+const FX_DEFAULTS = Object.fromEntries(FX_KEYS.map((k) => [k, P[k]]));
+const FX_STORE = 'krakatoa.settings.', FX_VERSION = 1;
+const fxPick = () => Object.fromEntries(FX_KEYS.map((k) => [k, P[k]]));
+// Stored settings → a complete, valid set: a value that is missing, of the wrong type or out of range falls back to
+// its default, a slider value snaps to its step, a quality this GPU cannot run falls back too
+function fxValid(o) {
+  const s = { ...FX_DEFAULTS };
+  if (!o || typeof o !== 'object') return s;
+  for (const defs of Object.values(SLIDERS)) {
+    for (const [k, , min, max, step] of defs) {
+      const v = o[k];
+      if (typeof v !== 'number' || !(v >= min && v <= max)) continue;
+      const d = (String(step).split('.')[1] || '').length;
+      s[k] = Math.min(max, Math.max(min, +(min + Math.round((v - min) / step) * step).toFixed(d)));
+    }
+  }
+  if (Number.isInteger(o.palette) && o.palette >= 0 && o.palette < PALETTES.length) s.palette = o.palette;
+  const q = Object.keys(QUALITY).includes(o.quality) && QUALITY[o.quality];
+  if (q && q.pw <= maxTex && q.ph <= maxTex) s.quality = o.quality;
+  for (const k of ['showSmoke', 'showParticles', 'cursorLight']) if (typeof o[k] === 'boolean') s[k] = o[k];
+  return s;
+}
+function fxLoad(mode) {
+  try {
+    const o = JSON.parse(localStorage.getItem(FX_STORE + mode));
+    if (o && o.version === FX_VERSION) return fxValid(o.settings);
+  } catch (_) { /* storage is optional */ }
+  return { ...FX_DEFAULTS };
+}
+function fxSave(mode, settings) {
+  try { localStorage.setItem(FX_STORE + mode, JSON.stringify({ version: FX_VERSION, settings })); } catch (_) { /* storage is optional */ }
+}
+const fx = { particles: fxLoad('particles'), volume: fxLoad('volume') };
+// A setting of either effect (the running one's is in P)
+const fxGet = (mode, k) => (mode === P.mode ? P[k] : fx[mode][k]);
+// The autopilot and panel switches as last set by hand (global, not per effect)
+const UI_STORE = 'krakatoa.ui';
+function uiLoad() {
+  try { const o = JSON.parse(localStorage.getItem(UI_STORE)); if (o && o.version === 1) return o; } catch (_) { /* storage is optional */ }
+  return {};
+}
+function uiSave(patch) {
+  try { localStorage.setItem(UI_STORE, JSON.stringify({ ...uiLoad(), ...patch, version: 1 })); } catch (_) { /* storage is optional */ }
+}
 
 /* ------------------------------------------------------------------ */
 /* Shaders                                                            */
@@ -1123,7 +1184,7 @@ try {
   pr.points = program(VS_POINTS, FS.pFrag);
 } catch (err) {
   console.error(err);
-  fail('En shader gick inte att kompilera på den här grafikdrivern. Detaljer finns i webbläsarens konsol.');
+  fail('A shader failed to compile on this graphics driver. The browser console has the details.');
   return;
 }
 // Volume mode programs: if any of them fails, only the volume mode is disabled
@@ -1132,18 +1193,18 @@ const pv = {};
 try {
   for (const k of Object.keys(VFS)) pv[k] = program(VS_QUAD, FH + VFS[k]);
 } catch (err) {
-  console.error('Volymläget är avstängt:', err);
+  console.error(MODE_LABEL.volume + ' is disabled:', err);
   volOK = false;
   P.mode = 'particles';
 }
-// Sub-grid detail programs: if either fails, Volym keeps the plain march
+// Sub-grid detail programs: if either fails, Smoke keeps the plain march
 let vDet = volOK;
 if (volOK) {
   try {
     pv.crd = program(VS_QUAD, FH + V_CRD);
     pv.marchD = program(VS_QUAD, FH + '#define DETAIL\n' + VFS.march);
   } catch (err) {
-    console.warn('Volymens detaljbrus är avstängt:', err);
+    console.warn(MODE_LABEL.volume + "'s detail noise is disabled:", err);
     vDet = false;
   }
 }
@@ -1194,7 +1255,7 @@ const FMT = { rgba: [gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT], rgba32: [gl.RGBA32F, g
 FMT.rg = supports([gl.RG16F, gl.RG, gl.HALF_FLOAT]) ? [gl.RG16F, gl.RG, gl.HALF_FLOAT] : FMT.rgba;
 FMT.r = supports([gl.R16F, gl.RED, gl.HALF_FLOAT]) ? [gl.R16F, gl.RED, gl.HALF_FLOAT] : FMT.rg;
 if (!supports(FMT.rgba) || !supports(FMT.rgba32)) {
-  fail('Grafikkortet kan inte rendera till de flyttalsformat som simuleringen behöver.');
+  fail("This graphics card can't render to the floating-point formats the simulation needs.");
   return;
 }
 
@@ -1248,8 +1309,10 @@ let PW = 0, PH = 0, N = 0, head = 0, simScale = 1;
 // Grid size for a short side of `res`; the long side is capped so extreme window shapes stay within the GPU limit
 const dims = (res) => aspect >= 1 ? [Math.min(maxTex, Math.round(res * aspect)), res] : [res, Math.min(maxTex, Math.round(res / aspect))];
 
+// Lava's targets follow Lava's quality, also while Smoke runs (so switching effects never rebuilds them)
+const lavaQ = () => QUALITY[fxGet('particles', 'quality')];
 function buildSim() {
-  const q = QUALITY[P.quality];
+  const q = lavaQ();
   simScale = q.sim / 128;
   const [sw, sh] = dims(q.sim), [dw, dh] = dims(q.dye);
   velocity = resampleDouble(velocity, sw, sh, FMT.rg, gl.LINEAR);
@@ -1266,16 +1329,16 @@ function initParticles() {
   head = 0;
 }
 function buildParticles() {
-  const q = QUALITY[P.quality];
+  const q = lavaQ();
   if (pstate && PW === q.pw && PH === q.ph) return;
   freeDouble(pstate);
   PW = q.pw; PH = q.ph; N = PW * PH;
   pstate = makeDouble(PW, PH, FMT.rgba32, gl.NEAREST);
   initParticles();
-  $('hudParticles').textContent = N.toLocaleString('sv-SE');
+  $('hudParticles').textContent = N.toLocaleString('en-US');
 }
 function buildScreen() {
-  const q = QUALITY[P.quality];
+  const q = lavaQ();
   accum = remake(accum, Math.max(2, Math.round(cssW * q.accum)), Math.max(2, Math.round(cssH * q.accum)), FMT.rgba, gl.LINEAR);
   const [lw, lh] = dims(360);
   dens = remake(dens, lw, lh, FMT.rgba, gl.LINEAR);
@@ -1292,18 +1355,18 @@ function buildScreen() {
 // Volume mode targets: the solver atlases (velocity; scalars = density, temperature, freshness; curl; divergence;
 // pressure), a TEXTURE_3D copy of the scalars for rendering, the half-res light atlas, the two half-res detail
 // atlases (noise coordinates, same layout as the light atlas) and the reduced-res ray-march layer.
-// Built on first use and kept in particle mode, so a mode round trip keeps the scene. A resize, quality change or
+// Built on first use and kept while Lava runs, so an effect round trip keeps the scene. A resize, quality change or
 // governor step resamples the old fields into the new grid (the detail atlases start over). The detail noise
 // texture does not depend on the grid: it is made with the first grid and kept.
 const max3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
 let vol3 = null, vMarchT = null, vNoise = null, grid2DText = '–';
 let volFail = ''; // grid that could not be built for this window ('' = the volume is ready)
 const V_RAYS = 6; // ray-march rays per grid cell; more add no detail (comp's tent filter smooths them anyway)
-const VOL_MIN_PX = 32; // Volym is frozen (no step, no new grid) while the window's short side is under this (CSS px)
-const VOL_SETTLE = 0.25; // s a resized window must keep its size before Volym moves the scene to a new grid
+const VOL_MIN_PX = 32; // Smoke is frozen (no step, no new grid) while the window's short side is under this (CSS px)
+const VOL_SETTLE = 0.25; // s a resized window must keep its size before Smoke moves the scene to a new grid
 let volSettle = 0; // s left until then
-// Volym's QUALITY row: the Kvalitet select, minus the rows the frame-rate governor has stepped down (governVolume),
-// never below Låg. The governor changes only this, never P.quality or the particle mode.
+// Smoke's QUALITY row: Smoke's selected quality minus the rows the frame-rate governor has stepped down
+// (governVolume), never below Low. The governor changes only this, never a selected quality or Lava.
 const QKEYS = Object.keys(QUALITY);
 let volDrop = 0;
 // t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more (lower under a cap), wait: s until the
@@ -1314,7 +1377,7 @@ let volDrop = 0;
 // rate the steps are judged by), skip: frames still to leave out of that count, cap: frame rate a step down did not
 // raise (0 = none; it ends with the hold), lift: s spent 15 % over it
 const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, hr: -1, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, fr: [], skip: 2, cap: 0, lift: 0 };
-const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
+const volLevel = (sel = fxGet('volume', 'quality')) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
 function make3D(w, h, d, n = vMRT) {
   gl.activeTexture(gl.TEXTURE0);
@@ -1360,12 +1423,12 @@ if (volOK) {
     if (!ok) continue;
     try { pv.to3d = program(VS_QUAD, fsLayers(V_TO3D, n)); vMRT = n; break; } catch (err) { console.error(err); }
   }
-  if (!vMRT || max3D < 128) { console.error('Volymläget är avstängt: kan inte rendera till 3D-texturer.'); volOK = false; P.mode = 'particles'; }
+  if (!vMRT || max3D < 128) { console.error(MODE_LABEL.volume + ' is disabled: cannot render to 3D textures.'); volOK = false; P.mode = 'particles'; }
 }
 
 // Tileable 64³ detail noise (RGBA8, made once, about 40 ms): rgb = curl of a gradient-noise vector potential (a
 // divergence-free displacement), a = scalar gradient noise. 16 noise cells per side, 4 texels each. null if the
-// texture cannot be made (Volym then keeps the plain march).
+// texture cannot be made (Smoke then keeps the plain march).
 function makeNoise3D() {
   const S = 64, C = 16, nch = 4, M = S - 1; // 4 texels per noise cell (S = 4·C, both powers of two)
   let st = 0x9E3779B9;
@@ -1480,7 +1543,7 @@ function free3DSim(V) {
 // Detail atlases for grid V (two noise-coordinate phases, light atlas layout); false if the driver refused them
 function buildDetail(V) {
   if (!vNoise) {
-    try { vNoise = makeNoise3D(); } catch (err) { console.warn('Volymens detaljbrus är avstängt:', err); }
+    try { vNoise = makeNoise3D(); } catch (err) { console.warn(MODE_LABEL.volume + "'s detail noise is disabled:", err); }
     if (!vNoise) { vDet = false; return false; }
   }
   V.crdA = makeDouble(V.lit.w, V.lit.h, FMT.rgba, gl.LINEAR);
@@ -1599,7 +1662,7 @@ function resize(force) {
   buildSim();
   buildParticles();
   buildScreen();
-  // the Kvalitet menu lists the grid each row gives for this window shape
+  // in Smoke the Quality menu lists the grid each row gives for this window shape
   if (P.mode === 'volume') qualityLabels();
 }
 
@@ -1856,11 +1919,11 @@ function updateParticles(dt, time, frame) {
 // segments on the mid plane (z = Z/2): a held pointer gives a gentle upward jet, a moving one drags the smoke along.
 const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
 const emitRadius = () => P.brush * 1.6; // screen heights
-const V_TAU = 4.1; // density e-folding time per unit of Livslängd (s)
+const V_TAU = 4.1; // density e-folding time per unit of Lifetime (s)
 let volT = 0; // volume time (s): only step3D advances it, so the detail phases stand still with a frozen scene
-// Livslängd label in Volym: seconds until smoke no longer shows (alpha < 0.05) after it leaves the emitter, measured
-// at Hög with default lift (mean over stops at 3–4.7 s of autopilot). It saturates because old smoke spreads thin
-// and rises off screen; coarser grids fade sooner (Medel about 20 %, Låg about 25 %).
+// Lifetime label in Smoke: seconds until smoke no longer shows (alpha < 0.05) after it leaves the emitter, measured
+// at High with default lift (mean over stops at 3–4.7 s of autopilot). It saturates because old smoke spreads thin
+// and rises off screen; coarser grids fade sooner (Medium about 20 %, Low about 25 %).
 const volLife = (v) => 7.8 * (1 - Math.exp(-v / 0.92));
 function emitterUniforms() {
   ui('uN', segN); uarr('uEA', 'uniform3fv', emA); uarr('uEB', 'uniform3fv', emB);
@@ -1895,7 +1958,7 @@ function step3D(dt, time) {
     emV[i * 3] = vx * k; emV[i * 3 + 1] = vy * k; emV[i * 3 + 2] = 0;
   }
 
-  // 1. Scalars: MacCormack advection, decay (Livslängd, Avsvalning), injection at the emitters; without emitters,
+  // 1. Scalars: MacCormack advection, decay (Lifetime, Cooling), injection at the emitters; without emitters,
   // the mass cap
   const dk = Math.exp(-dt / (V_TAU * P.life));
   if (!segN) massCap(V);
@@ -2136,8 +2199,8 @@ function clearAll() {
 /* ------------------------------------------------------------------ */
 let last = performance.now(), time = 0, frame = 0, fpsEMA = 60, hudT = 0;
 let volStepped = false; // this tick ran the volume solver (only those frames count for the governor)
-// Volym's frame-rate governor: when the frame rate stays under VOL_FPS for 2 s, the volume grid steps down one
-// QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. 3 s after a step
+// Smoke's frame-rate governor: when the frame rate stays under VOL_FPS for 2 s, the volume grid steps down one
+// QUALITY row (at most once per 3 s, never below Low) and build3D resamples the scene into it. 3 s after a step
 // down, and after at least 3 frames in the new grid, it checks that the frame rate rose by 10 %; if not, the grid
 // was not what held it back (the browser caps requestAnimationFrame, e.g. at 30 Hz to save power, or another app
 // loads the GPU), so the step is undone and it does not step down from that row for 30 s (the hold), doubling with
@@ -2149,7 +2212,7 @@ let volStepped = false; // this tick ran the volume solver (only those frames co
 // lifted, so the cap ends with the hold and the next step down finds out. A step down that helped keeps it out of
 // the row it left for 20 s, doubling with each further drop from that row (at most 4 min), so it does not swing
 // between two rows; after that, 5 s fast steps one row back up. Picking a quality starts over from that row, without
-// a cap; a mode switch or resize restarts the timers (the frames around them are slow anyway), and a resize forgets
+// a cap; an effect switch or resize restarts the timers (the frames around them are slow anyway), and a resize forgets
 // the cap. Both frame rates in the check are frames per s over the last 2 s of whole frames, at least 3 (before the
 // step: of the slow spell, so a slowdown earlier in a long spell cannot make a useless step look like a gain; after
 // it: of the wait), as at 1–3 fps fpsEMA holds only the last frame or two. The clocks run in wall time, so the waits
@@ -2207,14 +2270,14 @@ function tick(dt) {
   if (!P.paused) { time += dt; updateDemo(dt); }
   const emitters = gather(dt, time);
   updateLight(dt, emitters);
-  // Volym builds its targets on demand (so setting krakatoaDebug.P.mode directly also works). When they cannot
+  // Smoke builds its targets on demand (so setting krakatoaDebug.P.mode directly also works). When they cannot
   // be built for this window, the window is a sliver or it is still being resized, it shows its last state,
-  // frozen, and never falls back to the particle scene.
+  // frozen, and never falls back to Lava's scene.
   const volMode = P.mode === 'volume' && volOK;
   const vol = volMode && build3D();
   volStepped = false;
   if (!P.paused && vol === volMode) {
-    // Each mode simulates only its own scene; the other one stays as it was until you switch back
+    // Each effect simulates only its own scene; the other one stays as it was until you switch back
     if (segN) { hue += dt * 0.035; if (!vol) splat(); }
     if (vol) { step3D(dt, time); volStepped = true; }
     else {
@@ -2248,36 +2311,48 @@ function loop(now) {
   governVolume(gap);
   if ((hudT += Math.min(gap, 2)) > 0.5) {
     hudT = 0;
-    $('hudFps').textContent = fpsEMA < 9.95 ? fpsEMA.toFixed(1).replace('.', ',') : Math.round(fpsEMA);
+    $('hudFps').textContent = fpsEMA < 9.95 ? fpsEMA.toFixed(1) : Math.round(fpsEMA);
   }
 }
 document.addEventListener('visibilitychange', () => { loop.prev = 0; });
 // Test hook: advance the simulation a fixed number of frames synchronously, independent of
 // requestAnimationFrame throttling. krakatoaDebug.run(240) = 4 s of autopilot at 60 fps.
-// krakatoaDebug.setMode('particles' | 'volume') switches mode like the panel does.
+// krakatoaDebug.setMode('particles' | 'volume') switches effect (Lava | Smoke) like the panel does.
 window.krakatoaDebug = {
   P,
   run(frames = 240, dt = 1 / 60) { for (let i = 0; i < frames; i++) tick(dt); return frame; },
   setMode: (m) => setMode(m),
-  VT, // sub-grid detail settings for Volym, read every frame (VT.detail = 0: the plain march)
+  VT, // sub-grid detail settings for Smoke, read every frame (VT.detail = 0: the plain march)
   get volumeOK() { return volOK; },
   get grid3D() { return vol3 ? [vol3.X, vol3.Y, vol3.Z, vol3.AW, vol3.AH] : null; },
-  get volQuality() { return volLevel(); }, // the QUALITY row Volym runs (the select minus the governor's steps)
+  get volQuality() { return volLevel(); }, // the QUALITY row Smoke runs (its selected quality minus the governor's steps)
   get detailOK() { return !!(vol3 && vol3.crdA); }, // the current grid has its detail atlases
 };
 
-canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('Grafikkontexten tappades. Ladda om sidan för att starta igen.'); });
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('The graphics context was lost. Reload the page to start again.'); });
 
 /* ------------------------------------------------------------------ */
 /* UI                                                                 */
 /* ------------------------------------------------------------------ */
 const panel = $('panel'), toggleBtn = $('panelToggle');
-function setPanel(open) {
+const uiStored = uiLoad();
+if (typeof uiStored.auto === 'boolean') P.auto = uiStored.auto;
+// byHand: the button or H (remembered); the start-up default is not
+function setPanel(open, byHand) {
   panel.hidden = !open;
   toggleBtn.setAttribute('aria-expanded', String(open));
+  if (byHand) uiSave({ panel: open });
 }
-toggleBtn.addEventListener('click', () => setPanel(panel.hidden));
-if (coarse || innerWidth < 640) setPanel(false);
+toggleBtn.addEventListener('click', () => setPanel(panel.hidden, true));
+setPanel(typeof uiStored.panel === 'boolean' ? uiStored.panel : !(coarse || innerWidth < 640));
+
+// The running effect's settings are saved 0.4 s after the last change, when the effect is switched and when the
+// page is hidden or closed
+let fxSaveT = 0;
+function fxSaveNow() { clearTimeout(fxSaveT); fxSaveT = 0; fxSave(P.mode, fxPick()); }
+function fxSaveSoon() { clearTimeout(fxSaveT); fxSaveT = setTimeout(fxSaveNow, 400); }
+addEventListener('pagehide', () => { if (fxSaveT) fxSaveNow(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && fxSaveT) fxSaveNow(); });
 
 function setPalette(i) {
   P.palette = i;
@@ -2287,9 +2362,10 @@ function setPalette(i) {
   $('paletteName').textContent = p.name;
   document.querySelectorAll('.swatch').forEach((b, j) => b.setAttribute('aria-pressed', String(j === i)));
 }
-// A swatch shows the colours the current mode uses, from emission to the oldest smoke. Partiklar: the hot cycle
-// into the cool colour. Volym: its emission band (hot[0] ↔ hot[3], see emitHue), the ember glow, then the albedo
-// of cooled and of the oldest smoke.
+const pickPalette = (i) => { setPalette(i); fxSaveSoon(); };
+// A swatch shows the colours the running effect uses, from emission to the oldest smoke. Lava: the hot cycle into
+// the cool colour. Smoke: its emission band (hot[0] ↔ hot[3], see emitHue), the ember glow, then the albedo of
+// cooled and of the oldest smoke.
 function swatchBg(p) {
   return P.mode === 'volume'
     ? `linear-gradient(110deg, ${p.hot[0]} 0%, ${p.hot[3]} 22%, ${p.ember} 45%, ${p.smoke} 72%, ${p.tail} 100%)`
@@ -2300,8 +2376,8 @@ PALETTES.forEach((p, i) => {
   const b = document.createElement('button');
   b.type = 'button'; b.className = 'swatch'; b.id = 'pal-' + i;
   b.title = p.name + ' (' + (i + 1) + ')';
-  b.setAttribute('aria-label', 'Palett ' + p.name);
-  b.addEventListener('click', () => setPalette(i));
+  b.setAttribute('aria-label', p.name + ' palette');
+  b.addEventListener('click', () => pickPalette(i));
   $('swatches').appendChild(b);
 });
 paintSwatches();
@@ -2311,12 +2387,12 @@ for (const [k, q] of Object.entries(QUALITY)) {
   if (q.pw > maxTex || q.ph > maxTex) continue;
   const o = document.createElement('option');
   o.value = k;
-  o.textContent = `${q.label} · ${(q.pw * q.ph / 1e6).toFixed(q.pw * q.ph < 1e6 ? 2 : 1).replace('.', ',')} M partiklar`;
+  o.textContent = `${q.label} · ${(q.pw * q.ph / 1e6).toFixed(q.pw * q.ph < 1e6 ? 2 : 1)}M particles`;
   qSel.appendChild(o);
 }
 const qLabels = [...qSel.options].map((o) => o.textContent);
-// Volym lists the 3D grid each quality gives for the current window shape instead of the particle count, and
-// says when the frame-rate governor runs a lower row than the one selected (the HUD shows the grid it runs)
+// Smoke lists the 3D grid each quality gives for the current window shape instead of the particle count, and says
+// when the frame-rate governor runs a lower row than the one selected (the HUD shows the grid it runs)
 function qualityLabels() {
   const vol = P.mode === 'volume';
   [...qSel.options].forEach((o, i) => {
@@ -2324,47 +2400,20 @@ function qualityLabels() {
     o.textContent = g ? `${QUALITY[o.value].label} · ${g.X}×${g.Y}×${g.Z}` : qLabels[i];
   });
   const info = $('qualityInfo'), lowered = vol && volLevel() !== P.quality;
-  info.textContent = lowered ? 'sänkt till ' + QUALITY[volLevel()].label : '';
-  info.title = lowered ? 'Bildfrekvensen var för låg, så Volym kör ett grövre 3D-grid än det valda' : '';
+  info.textContent = lowered ? 'lowered to ' + QUALITY[volLevel()].label : '';
+  info.title = lowered ? `The frame rate was too low, so ${MODE_LABEL.volume} runs a coarser 3D grid than the one selected` : '';
+}
+// The running effect's quality changed: Lava rebuilds its targets; Smoke's governor starts over from the new row,
+// without a cap (build3D resamples the scene into the new grid on the next frame)
+function qualityChanged() {
+  if (P.mode === 'volume') {
+    volDrop = 0;
+    Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0, n: 0, s: 0, skip: 2, cap: 0 }); gov.fr.length = 0; gov.drops.fill(0); gov.ban.fill(0);
+  } else { buildSim(); buildParticles(); buildScreen(); }
+  qualityLabels();
 }
 qSel.value = P.quality;
-qSel.addEventListener('change', () => {
-  P.quality = qSel.value;
-  volDrop = 0;
-  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0, n: 0, s: 0, skip: 2, cap: 0 }); gov.fr.length = 0; gov.drops.fill(0); gov.ban.fill(0);
-  buildSim(); buildParticles(); buildScreen();
-  qualityLabels();
-});
-
-// Läge: Partiklar (fine additive particle smoke) / Volym (ray-marched 3D smoke solver). The 3D targets are built
-// on the first volume frame and kept afterwards, so switching back and forth keeps both scenes.
-const MODES = [['particles', 'mode-particles'], ['volume', 'mode-volume']];
-function setMode(m) {
-  if (m !== 'volume' || !volOK) m = 'particles';
-  // each mode has its own autopilot path: re-seed the brush on the new one, so it never strokes across the screen
-  if (m !== P.mode) demo.on = false;
-  P.mode = m;
-  try { localStorage.setItem('krakatoa.mode', m); } catch (_) { /* storage is optional */ }
-  const vol = m === 'volume';
-  const prevFocus = document.activeElement;
-  for (const [val, id] of MODES) $(id).setAttribute('aria-pressed', String(m === val));
-  $('g-volume').hidden = !vol;
-  // controls that only affect the particle renderer
-  for (const id of ['s-smoke', 's-particles']) $(id).parentElement.hidden = vol;
-  for (const id of ['t-showSmoke', 't-showParticles']) $(id).closest('label').hidden = vol;
-  $('hudPartBox').hidden = vol;
-  $('hudPartSep').hidden = vol;
-  // M on a control that this mode hides: keep keyboard focus in the panel, on the button of the mode now shown
-  if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
-  if (sliderSync.life) sliderSync.life();
-  gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
-  if (gov.fps0) gov.wait = 3;
-  updateGridHud();
-  qualityLabels();
-  paintSwatches();
-}
-for (const [val, id] of MODES) $(id).addEventListener('click', () => setMode(val));
-if (!volOK) { $('mode-volume').disabled = true; $('mode-volume').title = 'Volymläget stöds inte av den här grafikdrivern'; }
+qSel.addEventListener('change', () => { P.quality = qSel.value; qualityChanged(); fxSaveSoon(); });
 
 for (const [group, defs] of Object.entries(SLIDERS)) {
   const g = $(group);
@@ -2379,29 +2428,90 @@ for (const [group, defs] of Object.entries(SLIDERS)) {
       input.style.setProperty('--fill', ((P[key] - min) / (max - min)) * 100 + '%');
     };
     input.value = P[key];
-    input.addEventListener('input', () => { P[key] = parseFloat(input.value); sync(); });
+    input.addEventListener('input', () => { P[key] = parseFloat(input.value); sync(); fxSaveSoon(); });
     sync();
     sliderSync[key] = sync;
     g.appendChild(row);
   }
 }
 
-function setToggle(key, val) {
+// byHand: the switch or A. The autopilot is remembered only then, not when drawing or reduced motion turns it off.
+function setToggle(key, val, byHand) {
   P[key] = val;
   const el = $('t-' + key);
   if (el) el.checked = val;
-  if (key === 'auto' && val) demo.t = 0;
+  if (key !== 'auto') { if (byHand) fxSaveSoon(); return; }
+  if (val) demo.t = 0;
+  if (byHand) uiSave({ auto: val });
 }
 for (const key of ['showSmoke', 'showParticles', 'cursorLight', 'auto']) {
   const el = $('t-' + key);
   el.checked = P[key];
-  el.addEventListener('change', () => setToggle(key, el.checked));
+  el.addEventListener('change', () => setToggle(key, el.checked, true));
 }
+
+// Shows the running effect's settings (in P) in every control, with its palette
+function fxApply() {
+  setPalette(P.palette);
+  qSel.value = P.quality;
+  for (const k of Object.keys(sliderSync)) { $('s-' + k).value = P[k]; sliderSync[k](); }
+  for (const k of ['showSmoke', 'showParticles', 'cursorLight']) $('t-' + k).checked = P[k];
+  qualityLabels();
+}
+// Reset: the running effect back to its defaults, saved at once
+function fxReset() {
+  const q = P.quality;
+  Object.assign(P, FX_DEFAULTS);
+  fxApply();
+  if (P.quality !== q) qualityChanged();
+  fxSaveNow();
+}
+$('btnReset').addEventListener('click', fxReset);
+
+// Effect: Lava (fine additive particle smoke) / Smoke (ray-marched 3D smoke solver). The 3D targets are built on the
+// first Smoke frame and kept afterwards, so switching back and forth keeps both scenes.
+const MODES = [['particles', 'mode-particles'], ['volume', 'mode-volume']];
+for (const [val, id] of MODES) $(id).textContent = MODE_LABEL[val];
+function setMode(m) {
+  if (m !== 'volume' || !volOK) m = 'particles';
+  if (m !== P.mode) {
+    // each effect has its own autopilot path: re-seed the brush on the new one, so it never strokes across the screen
+    demo.on = false;
+    // and its own settings: save and park this one's, bring back the other's. Nothing is rebuilt: Lava's targets
+    // follow Lava's quality and Smoke's grid follows Smoke's, so both scenes survive the round trip.
+    fxSaveNow();
+    fx[P.mode] = fxPick();
+    P.mode = m;
+    Object.assign(P, fx[m]);
+    fxApply();
+  }
+  try { localStorage.setItem('krakatoa.mode', m); } catch (_) { /* storage is optional */ }
+  const vol = m === 'volume';
+  const prevFocus = document.activeElement;
+  for (const [val, id] of MODES) $(id).setAttribute('aria-pressed', String(m === val));
+  $('g-volume').hidden = !vol;
+  // controls that only affect Lava's renderer
+  for (const id of ['s-smoke', 's-particles']) $(id).parentElement.hidden = vol;
+  for (const id of ['t-showSmoke', 't-showParticles']) $(id).closest('label').hidden = vol;
+  $('hudPartBox').hidden = vol;
+  $('hudPartSep').hidden = vol;
+  $('btnReset').textContent = `Reset ${MODE_LABEL[m]} settings`;
+  // M on a control that this effect hides: keep keyboard focus in the panel, on the button of the effect now shown
+  if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
+  if (sliderSync.life) sliderSync.life();
+  gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
+  if (gov.fps0) gov.wait = 3;
+  updateGridHud();
+  qualityLabels();
+  paintSwatches();
+}
+for (const [val, id] of MODES) $(id).addEventListener('click', () => setMode(val));
+if (!volOK) { $('mode-volume').disabled = true; $('mode-volume').title = `${MODE_LABEL.volume} isn't supported by this graphics driver`; }
 
 const pauseBtn = $('btnPause');
 function togglePause() {
   P.paused = !P.paused;
-  pauseBtn.firstChild.textContent = P.paused ? 'Fortsätt ' : 'Pausa ';
+  pauseBtn.firstChild.textContent = P.paused ? 'Resume ' : 'Pause ';
 }
 pauseBtn.addEventListener('click', togglePause);
 $('btnClear').addEventListener('click', clearAll);
@@ -2411,27 +2521,30 @@ window.addEventListener('keydown', (e) => {
   // Focused controls keep Space/Enter and their own keys; the letter and digit shortcuts still apply
   const ctl = e.target.closest && e.target.closest('input, select, textarea, button');
   if (ctl && (e.code === 'Space' || e.key === 'Enter' || !/^[mhca1-5]$/i.test(e.key))) return;
-  if (ctl && ctl.tagName === 'SELECT') e.preventDefault(); // stop type-ahead, e.g. M selecting "Medel"
+  if (ctl && ctl.tagName === 'SELECT') e.preventDefault(); // stop type-ahead, e.g. M selecting "Medium"
   if (e.code === 'Space') { e.preventDefault(); togglePause(); }
   else if (e.key === 'c' || e.key === 'C') clearAll();
-  else if (e.key === 'h' || e.key === 'H') setPanel(panel.hidden);
-  else if (e.key === 'a' || e.key === 'A') setToggle('auto', !P.auto);
+  else if (e.key === 'h' || e.key === 'H') setPanel(panel.hidden, true);
+  else if (e.key === 'a' || e.key === 'A') setToggle('auto', !P.auto, true);
   else if (e.key === 'm' || e.key === 'M') setMode(P.mode === 'volume' ? 'particles' : 'volume');
-  else if (/^[1-5]$/.test(e.key)) setPalette(+e.key - 1);
+  else if (/^[1-5]$/.test(e.key)) pickPalette(+e.key - 1);
 });
 
 /* ------------------------------------------------------------------ */
-setPalette(P.palette);
-resize(true);
+// Start in the effect the address names (#lava, #smoke, or the older #partiklar, #volym), else the one used last,
+// else Lava, with that effect's saved settings
+const HASH_MODE = { '#lava': 'particles', '#partiklar': 'particles', '#smoke': 'volume', '#volym': 'volume' };
+const hashMode = () => HASH_MODE[location.hash.toLowerCase()];
 let startMode = P.mode;
 try { const m = localStorage.getItem('krakatoa.mode'); if (m === 'volume' || m === 'particles') startMode = m; } catch (_) { /* storage is optional */ }
-if (/^#volym$/i.test(location.hash)) startMode = 'volume';
-else if (/^#partiklar$/i.test(location.hash)) startMode = 'particles';
+startMode = hashMode() || startMode;
+if (startMode !== 'volume' || !volOK) startMode = 'particles';
+P.mode = startMode;
+Object.assign(P, fx[startMode]);
+fxApply();
+resize(true);
 setMode(startMode);
-window.addEventListener('hashchange', () => {
-  if (/^#volym$/i.test(location.hash)) setMode('volume');
-  else if (/^#partiklar$/i.test(location.hash)) setMode('particles');
-});
+window.addEventListener('hashchange', () => { const m = hashMode(); if (m) setMode(m); });
 requestAnimationFrame((t) => { last = t; loop(t); });
 })();
 </script>
