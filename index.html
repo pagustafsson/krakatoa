@@ -739,10 +739,11 @@ void main() {
   // MacCormack step 2: trace the result forward again and correct by half the round-trip error. Where the
   // corrected value overshoots the source cell's neighbourhood it falls back to the semi-Lagrangian value (a clamp
   // to the maximum would keep the overshoot); where it undershoots it is clamped to the neighbourhood minimum (a
-  // fallback would lift it back up at every plume edge). Each picks the lower of the two options, so the limiter
-  // does not add mass. Then decay, and the emitters: noisy density is added, temperature and freshness are set to
-  // the brush profile.
-  advS2: V_ATLAS + V_BRUSH + V_NOISE + `uniform sampler2D uVel, uSrc, uHat; uniform float uDt, uDRate, uDMax, uTRate, uTime; uniform vec3 uDecay;
+  // fallback would lift it back up at every plume edge). Each picks the lower of the two options, but the clamp
+  // still lifts undershoots, so with no emitter active (uN = 0) the density is scaled by the mass cap's factor
+  // (massCap), which keeps its total from growing. Then decay, and the emitters: noisy density is added,
+  // temperature and freshness are set to the brush profile.
+  advS2: V_ATLAS + V_BRUSH + V_NOISE + `uniform sampler2D uVel, uSrc, uHat, uMass; uniform float uDt, uDRate, uDMax, uTRate, uTime; uniform vec3 uDecay;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
   vec3 p = vec3(c) + 0.5;
@@ -760,6 +761,7 @@ void main() {
   vec4 hat = texelFetch(uHat, texOf(c), 0);
   vec4 s = hat + 0.5 * (texelFetch(uSrc, texOf(c), 0) - S(uHat, p + uDt * v));
   s = mix(max(s, lo), hat, step(hi + 1e-6, s));
+  if (uN == 0) s.x *= texelFetch(uMass, ivec2(0), 0).y;
   s.xyz *= uDecay;
   vec3 rel; int bi;
   float w = brush(p, rel, bi);
@@ -771,6 +773,30 @@ void main() {
     s.z = max(s.z, w);
   }
   o = s;
+}`,
+
+  // Mass cap, 1: each texel sums a 4×4 block of uSrc (texels past its edge count 0), so a few passes take the
+  // scalar atlas down to its totals in one RGBA32F texel
+  sum: `uniform sampler2D uSrc;
+void main() {
+  ivec2 b = ivec2(gl_FragCoord.xy) * 4, n = textureSize(uSrc, 0);
+  vec4 s = vec4(0.0);
+  for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+    ivec2 t = b + ivec2(i, j);
+    if (t.x < n.x && t.y < n.y) s += texelFetch(uSrc, t, 0);
+  }
+  o = s;
+}`,
+
+  // Mass cap, 2: x = this step's density total (uSum), y = the factor advS2 scales the limited density by. Last
+  // step's limited total is this total over last step's factor and decay (uDk), so y = min(1, last step's total /
+  // its limited total) and the total cannot grow. y = 1 when uOn = 0 (last step injected, or the grid is new) and
+  // when there is no density.
+  mass: `uniform sampler2D uSum, uPrev; uniform float uOn, uDk;
+void main() {
+  float m = texelFetch(uSum, ivec2(0), 0).x;
+  vec4 p = texelFetch(uPrev, ivec2(0), 0);
+  o = vec4(m, uOn > 0.0 && m > 0.0 && p.x > 0.0 ? min(1.0, p.x * p.y * uDk / m) : 1.0, 0.0, 0.0);
 }`,
 
   advV: V_ATLAS + `uniform sampler2D uVel; uniform float uDt, uDamp;
@@ -806,7 +832,7 @@ void main() {
   vec4 s = F(uScal, c);
   // confinement only where there is smoke, so empty air cannot feed back on itself
   vec3 f = uEps * min(s.x * 4.0, 1.0) * cross(g / (length(g) + 1e-4), w);
-  
+
   f.y += uBuoy * (s.y + 0.45 * s.z);
   vec3 p = vec3(c) + 0.5;
   vec3 q = p * uTF, t = uTime * vec3(0.53, 0.71, 0.37);
@@ -1280,12 +1306,14 @@ let volSettle = 0; // s left until then
 // never below Låg. The governor changes only this, never P.quality or the particle mode.
 const QKEYS = Object.keys(QUALITY);
 let volDrop = 0;
-// t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more, wait: s until the next step is allowed,
-// fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked), hold: t until which it
-// does not step down (a step down did not help), fails: such steps in a row, drops: confirmed steps down from each
-// row, ban: t until which the step up into each row is skipped, n, s: frames counted and their length in s (the
-// frame rate the steps are judged by), skip: frames still to leave out of that count
-const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, skip: 2 };
+// t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more (lower under a cap), wait: s until the
+// next step is allowed, fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked),
+// hold: t until which it does not step down (a step down did not help), fails: such steps in a row, drops:
+// confirmed steps down from each row, ban: t until which the step up into each row is skipped, n, s, fr: frames
+// counted, their length in s and the lengths one by one (the last 2 s, at least 3 frames: the frame rate the steps
+// are judged by), skip: frames still to leave out of that count, cap: frame rate a step down did not raise (0 =
+// none), lift: s spent 15 % over it
+const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, fr: [], skip: 2, cap: 0, lift: 0 };
 const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
 function make3D(w, h, d, n = vMRT) {
@@ -1446,6 +1474,7 @@ function ut3(n, unit, t) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(
 function atlasU() { const V = vol3; ui3('uG', V.X, V.Y, V.Z); ui3('uGp', V.X >> 2, V.Y, V.Z); ui('uCols', V.cols); uf('uAtl', 1 / V.AW, 1 / V.AH); }
 function free3DSim(V) {
   freeDouble(V.vel); freeDouble(V.scal); freeFBO(V.tmp); freeFBO(V.curl); freeFBO(V.div); freeDouble(V.pres);
+  V.sum.forEach(freeFBO); freeDouble(V.mass);
   free3DTex(V.den3); freeFBO(V.lit); freeDouble(V.crdA); freeDouble(V.crdB);
 }
 // Detail atlases for grid V (two noise-coordinate phases, light atlas layout); false if the driver refused them
@@ -1488,12 +1517,16 @@ function build3D() {
     V.curl = makeFBO(g.AW, g.AH, FMT.rgba, gl.NEAREST);
     V.div = makeFBO(g.PW, g.AH, FMT.rgba, gl.NEAREST);
     V.pres = makeDouble(g.PW, g.AH, FMT.rgba, gl.NEAREST);
+    // the mass cap's sums (4×4 blocks down to 1×1) and its state (massCap)
+    V.sum = [];
+    for (let w = g.AW, h = g.AH; w > 1 || h > 1;) { w = Math.ceil(w / 4); h = Math.ceil(h / 4); V.sum.push(makeFBO(w, h, FMT.rgba32, gl.NEAREST)); }
+    V.mass = makeDouble(1, 1, FMT.rgba32, gl.NEAREST);
     V.den3 = make3D(g.X, g.Y, g.Z);
     V.lit = V.LC ? makeFBO(V.LC * V.LX, Math.ceil(V.LZ / V.LC) * V.LY, FMT.rgba, gl.LINEAR) : null;
     // without its render targets the new grid is useless: keep the old sim, it is resampled once a size works again
     if (!V.den3.ok || !V.lit) { free3DSim(V); return volFailed(key); }
     // the detail is optional: a grid without its atlases gets the plain march
-    V.cyc = null; V.simDt = 0;
+    V.cyc = null; V.simDt = 0; V.massDk = 0;
     if (vDet) buildDetail(V);
     vol3 = V;
     if (old) {
@@ -1515,6 +1548,10 @@ function build3D() {
     }
     updateGridHud();
     qualityLabels();
+  } else {
+    // same grid in a new window (a zoom or a resize that keeps the shape): the scene is now shown at this size, so
+    // the next resample has to start from this scale, not the one the grid was built at
+    old.pxc = cssH / old.Y; old.w = cssW; old.h = cssH;
   }
   // march buffer: q.rm × CSS px, capped at V_RAYS rays per grid cell so big windows stop paying for extra rays
   // (Y is the grid's cell count along the screen height in both orientations)
@@ -1555,7 +1592,7 @@ function resize(force) {
   cssW = w; cssH = h; dpr = d; aspect = w / h;
   volSettle = VOL_SETTLE;
   // the governor starts over for the new window (a pending check of its last step waits for frames at this size)
-  gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2; gov.hold = gov.fails = 0; gov.drops.fill(0); gov.ban.fill(0);
+  gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2; gov.hold = gov.fails = gov.cap = 0; gov.drops.fill(0); gov.ban.fill(0);
   if (gov.fps0) gov.wait = 3;
   canvas.width = Math.max(1, Math.round(w * d));
   canvas.height = Math.max(1, Math.round(h * d));
@@ -1830,6 +1867,20 @@ function emitterUniforms() {
   const r = emitRadius() * vol3.Y;
   uf('uRad2', r * r);
 }
+// Mass cap while no emitter is active. advS2's limiter lifts undershoots to the neighbourhood minimum, which adds a
+// little density every step; with nothing injected, a fading plume grew again by up to 28 % in the seconds after a
+// stroke ended. So each step without an emitter sums the density on the GPU, and advS2 scales the limited density
+// by min(1, last step's total / last step's limited total). The limited total is this step's total over last
+// step's factor and decay (V.massDk; 0 when last step injected or the grid is new), so one sum a step does it,
+// without a readback; the factor lags one step.
+function massCap(V) {
+  let src = V.scal.read;
+  use(pv.sum);
+  for (const f of V.sum) { ut('uSrc', 0, src); draw(f); src = f; }
+  use(pv.mass);
+  ut('uSum', 0, src); ut('uPrev', 1, V.mass.read); uf('uOn', V.massDk ? 1 : 0); uf('uDk', V.massDk);
+  draw(V.mass.write); V.mass.swap();
+}
 function step3D(dt, time) {
   const V = vol3, Y = V.Y, q = QUALITY[volLevel()];
   V.simDt += dt; volT += dt; // the detail coordinates are advected by the simulated time at the next render
@@ -1844,15 +1895,19 @@ function step3D(dt, time) {
     emV[i * 3] = vx * k; emV[i * 3 + 1] = vy * k; emV[i * 3 + 2] = 0;
   }
 
-  // 1. Scalars: MacCormack advection, decay (Livslängd, Avsvalning), injection at the emitters
+  // 1. Scalars: MacCormack advection, decay (Livslängd, Avsvalning), injection at the emitters; without emitters,
+  // the mass cap
+  const dk = Math.exp(-dt / (V_TAU * P.life));
+  if (!segN) massCap(V);
   use(pv.advS); atlasU();
   ut('uVel', 0, V.vel.read); ut('uSrc', 1, V.scal.read); uf('uDt', dt);
   draw(V.tmp);
   use(pv.advS2); atlasU(); emitterUniforms();
-  ut('uVel', 0, V.vel.read); ut('uSrc', 1, V.scal.read); ut('uHat', 2, V.tmp);
+  ut('uVel', 0, V.vel.read); ut('uSrc', 1, V.scal.read); ut('uHat', 2, V.tmp); ut('uMass', 3, V.mass.read);
   uf('uDt', dt); uf('uTime', time); uf('uDRate', 9 * P.emission); uf('uDMax', 3); uf('uTRate', 9);
-  uf('uDecay', Math.exp(-dt / (V_TAU * P.life)), Math.exp(-dt / P.coolTime), Math.exp(-dt / (2.2 * P.life)));
+  uf('uDecay', dk, Math.exp(-dt / P.coolTime), Math.exp(-dt / (2.2 * P.life)));
   draw(V.scal.write); V.scal.swap();
+  V.massDk = segN ? 0 : dk;
 
   // 2. Velocity self-advection
   use(pv.advV); atlasU();
@@ -2085,38 +2140,50 @@ let volStepped = false; // this tick ran the volume solver (only those frames co
 // QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. 3 s after a step
 // down, and after at least 3 frames in the new grid, it checks that the frame rate rose by 10 %; if not, the grid
 // was not what held it back (the browser caps requestAnimationFrame, e.g. at 30 Hz to save power, or another app
-// loads the GPU), so the step is undone and it does not step down for 30 s, doubling with each such failure in a
-// row (at most 4 min). A step down that helped keeps it out of the row it left for 20 s, doubling with each
-// further drop from that row (at most 4 min), so it does not swing between two rows; after that, 5 s at
-// VOL_FPS_UP or more steps one row back up. Picking a quality starts over from that row; a mode switch or resize
-// restarts the timers (the frames around them are slow anyway). Both frame rates in the check are frames per s
-// over whole frames (before the step: the slow spell; after it: the last 2 s of the wait), as at 1–3 fps fpsEMA
-// holds only the last frame or two. The clocks run in wall time, so the waits are the same at any frame rate;
-// slow and fast count at most 0.25 s a frame, so one hitch is not 2 s of slowness.
+// loads the GPU), so the step is undone and it does not step down for 30 s, doubling with each such failure in a row
+// (at most 4 min). The frame rate it had in the lower grid is then taken as a cap (gov.cap): until the frame rate
+// stays 15 % over it for 2 s (the cap was lifted), slow means under 85 % of the cap and fast 95 % of it or more
+// (never more than VOL_FPS and VOL_FPS_UP), so under a 30 Hz cap 30 fps counts as good and it does not probe the
+// rows below again and again. A step down that helped keeps it out of the row it left for 20 s, doubling with each
+// further drop from that row (at most 4 min), so it does not swing between two rows; after that, 5 s fast steps one
+// row back up. Picking a quality starts over from that row, without a cap; a mode switch or resize restarts the
+// timers (the frames around them are slow anyway), and a resize forgets the cap. Both frame rates in the check are
+// frames per s over the last 2 s of whole frames, at least 3 (before the step: of the slow spell, so a slowdown
+// earlier in a long spell cannot make a useless step look like a gain; after it: of the wait), as at 1–3 fps fpsEMA
+// holds only the last frame or two. The clocks run in wall time, so the waits are the same at any frame rate; slow,
+// fast and the cap's lift count at most 0.25 s a frame, so one hitch is not 2 s of slowness.
 const VOL_FPS = 50, VOL_FPS_UP = 58;
 function governVolume(el) {
   // el: the frame's length in s, 0 for the first frame after a pause. The count leaves out the first two frames
   // after a grid change, a resize or a frame that did not step the volume: their time is the old grid's last
   // frame, the resample or the frame in between.
-  if (!volStepped || !el) { gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2; return; }
+  if (!volStepped || !el) { gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2; return; }
   const w = Math.min(el, 2), h = Math.min(el, 0.25);
   gov.t += w;
   gov.wait = Math.max(0, gov.wait - w);
   if (gov.skip) gov.skip--;
-  else if (gov.wait <= 2) { gov.n++; gov.s += el; }
+  else if (gov.wait <= 2) {
+    // the count slides: the oldest frame drops out while the rest still span 2 s and are at least 3
+    gov.n++; gov.s += el; gov.fr.push(el);
+    while (gov.fr.length > 3 && gov.s - gov.fr[0] >= 2) { gov.s -= gov.fr.shift(); gov.n--; }
+  }
   if (gov.fps0 && !gov.wait && gov.n >= 3) {
     if (gov.n / gov.s < gov.fps0 * 1.1) {
       volDrop--; gov.hold = gov.t + Math.min(240, 30 * 2 ** gov.fails++); gov.wait = 3; qualityLabels();
-      gov.n = gov.s = 0; gov.skip = 2;
+      gov.cap = gov.n / gov.s; gov.lift = 0; // a rate the grid did not limit
+      gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
     } else {
+      // kept: the count goes on, its frames are this grid's
       gov.fails = 0; gov.ban[gov.r0] = gov.t + Math.min(240, 20 * 2 ** gov.drops[gov.r0]++);
     }
     gov.fps0 = 0;
   }
-  if (fpsEMA < VOL_FPS) { gov.slow += h; gov.fast = 0; }
+  if (gov.cap) { gov.lift = fpsEMA > 1.15 * gov.cap ? gov.lift + h : 0; if (gov.lift >= 2) gov.cap = 0; }
+  const lo = gov.cap ? Math.min(VOL_FPS, 0.85 * gov.cap) : VOL_FPS, up = gov.cap ? Math.min(VOL_FPS_UP, 0.95 * gov.cap) : VOL_FPS_UP;
+  if (fpsEMA < lo) { gov.slow += h; gov.fast = 0; }
   else {
-    gov.slow = 0; gov.fast = fpsEMA >= VOL_FPS_UP ? gov.fast + h : 0;
-    if (!gov.fps0) gov.n = gov.s = 0; // the count for a step down covers the slow spell only
+    gov.slow = 0; gov.fast = fpsEMA >= up ? gov.fast + h : 0;
+    if (!gov.fps0) gov.n = gov.s = gov.fr.length = 0; // the count for a step down covers the slow spell only
   }
   if (gov.wait || gov.fps0) return;
   const r = QKEYS.indexOf(volLevel());
@@ -2125,7 +2192,7 @@ function governVolume(el) {
   } else if (gov.fast >= 5 && volDrop > 0 && gov.t >= gov.ban[r + 1]) {
     volDrop--;
   } else return;
-  gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2; gov.wait = 3;
+  gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2; gov.wait = 3;
   qualityLabels();
 }
 function tick(dt) {
@@ -2164,8 +2231,11 @@ function loop(now) {
   tick(dt);
   // frame rate averaged over wall time (0.4 s), not over frames: it is as current at 1 fps as at 60, and each
   // frame weighs by its length, so alternating 16.7 and 33.3 ms frames read 40, the frames actually shown per s.
-  // A gap of 5 s or more, or the first frame after the tab was hidden, is a pause, not a frame (gap 0).
-  const gap = loop.prev && now - loop.prev < 5000 ? Math.max(now - loop.prev, 1) / 1000 : 0;
+  // A lone gap of 5 s or more, or the first frame after the tab was hidden, is a pause, not a frame (gap 0); two
+  // such gaps in a row are this machine's frame time, so a very slow GPU still counts (and the HUD keeps up).
+  const raw = loop.prev ? now - loop.prev : 0;
+  const gap = raw && (raw < 5000 || loop.long) ? Math.max(raw, 1) / 1000 : 0;
+  loop.long = raw >= 5000;
   loop.prev = now;
   if (gap) fpsEMA += (1 / gap - fpsEMA) * (1 - Math.exp(-gap / 0.4));
   governVolume(gap);
@@ -2254,7 +2324,7 @@ qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
   volDrop = 0;
-  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0, n: 0, s: 0, skip: 2 }); gov.drops.fill(0); gov.ban.fill(0);
+  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0, n: 0, s: 0, skip: 2, cap: 0 }); gov.fr.length = 0; gov.drops.fill(0); gov.ban.fill(0);
   buildSim(); buildParticles(); buildScreen();
   qualityLabels();
 });
@@ -2280,7 +2350,7 @@ function setMode(m) {
   // M on a control that this mode hides: keep keyboard focus in the panel, on the button of the mode now shown
   if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
   if (sliderSync.life) sliderSync.life();
-  gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2;
+  gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
   if (gov.fps0) gov.wait = 3;
   updateGridHud();
   qualityLabels();
