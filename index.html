@@ -736,8 +736,9 @@ void main() {
   o = S(uSrc, b) * inflow(b);
 }`,
 
-  // MacCormack step 2: trace the result forward again, correct by half the round-trip error, clamp to the
-  // source cell's neighbourhood (keeps it stable). Then decay, and the emitters: noisy density is added,
+  // MacCormack step 2: trace the result forward again and correct by half the round-trip error. Where the
+  // corrected value leaves the source cell's neighbourhood it falls back to the semi-Lagrangian value (a clamp
+  // there would keep overshoots and gain mass). Then decay, and the emitters: noisy density is added,
   // temperature and freshness are set to the brush profile.
   advS2: V_ATLAS + V_BRUSH + V_NOISE + `uniform sampler2D uVel, uSrc, uHat; uniform float uDt, uDRate, uDMax, uTRate, uTime; uniform vec3 uDecay;
 void main() {
@@ -755,10 +756,8 @@ void main() {
   float wi = inflow(b);
   lo *= wi; hi *= wi;
   vec4 hat = texelFetch(uHat, texOf(c), 0);
-  vec4 s = clamp(hat + 0.5 * (texelFetch(uSrc, texOf(c), 0) - S(uHat, p + uDt * v)), lo, hi);
-  // The clamp cuts undershoots (mostly at 0) more than overshoots, so MacCormack gains density mass; damping its
-  // correction where it lifts density above the semi-Lagrangian value keeps the total from growing.
-  s.x = min(s.x, mix(hat.x, s.x, 0.95));
+  vec4 s = hat + 0.5 * (texelFetch(uSrc, texOf(c), 0) - S(uHat, p + uDt * v));
+  s = mix(s, hat, max(step(s, lo - 1e-6), step(hi + 1e-6, s)));
   s.xyz *= uDecay;
   vec3 rel; int bi;
   float w = brush(p, rel, bi);
@@ -860,11 +859,13 @@ void main() {
   o = vec4(F(uVel, c).xyz - g, 0.0);
 }`,
 
-  // Resize / quality change: resample an old atlas (grid uGo, uColso tiles per row) into the current grid
-  resample: V_ATLAS + `uniform sampler2D uSrc; uniform ivec3 uGo; uniform int uColso; uniform vec2 uAtlo; uniform vec4 uMul;
+  // Resize / quality change: resample an old atlas (grid uGo, uColso tiles per row) into the current grid.
+  // Velocity (uVmax > 0) is capped at uVmax cells/s, so a very uneven per-axis stretch cannot blow it up.
+  resample: V_ATLAS + `uniform sampler2D uSrc; uniform ivec3 uGo; uniform int uColso; uniform vec2 uAtlo; uniform vec4 uMul; uniform float uVmax;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
   o = Sx(uSrc, (vec3(c) + 0.5) / vec3(uG) * vec3(uGo), uGo, uColso, uAtlo) * uMul;
+  if (uVmax > 0.0) o.xyz *= min(1.0, uVmax / max(length(o.xyz), 1e-6));
 }`,
 
   // Light volume at half resolution, one draw over its own atlas (uLg cells per tile, uLc tiles per row; a few
@@ -1006,10 +1007,11 @@ void main() {
 // phase started (cells), advected with the flow (semi-Lagrangian) and zeroed when the phase restarts. w: phase A =
 // density averaged over the 4×4×4 cells around the voxel (gates the detail to big billows); phase B = how much to
 // hold the detail back (hot flame gas, fast jets, noise over-stretched in either phase, i.e. squeezed finer than
-// the ray march can sample).
+// the ray march can sample; a phase's stretch fades out with its blend weight before it restarts, so the phase
+// that is about to restart never gates the other one).
 const V_CRD = V_ATLAS + `precision highp sampler3D;
 uniform sampler2D uVel, uCrd, uCrdO; uniform sampler3D uDen;
-uniform ivec3 uLg; uniform int uLc; uniform vec2 uLAtl, uFast, uStr; uniform float uDt, uReset; uniform int uCh;
+uniform ivec3 uLg; uniform int uLc; uniform vec2 uLAtl, uFast, uStr, uPhW; uniform float uDt, uReset; uniform int uCh;
 vec3 FL(sampler2D s, ivec3 c) { c = clamp(c, ivec3(0), uLg - 1); return texelFetch(s, ivec2(c.z % uLc, c.z / uLc) * uLg.xy + c.xy, 0).xyz; }
 // Frobenius norm of the Jacobian of the noise coordinates p + phi(p): sqrt 3 when unstretched
 float stretch(sampler2D s, ivec3 c) {
@@ -1030,8 +1032,11 @@ void main() {
   for (int j = 0; j < 8; j++) a += texture(uDen, (c + vec3(j & 1, (j >> 1) & 1, j >> 2) * 2.0 - 1.0) * inv).xy;
   a *= 0.125;
   if (uCh == 0) { o = vec4(phi, a.x); return; }
-  float st = max(uReset > 0.5 ? 0.0 : stretch(uCrd, h), stretch(uCrdO, h));
-  o = vec4(phi, max(max(smoothstep(0.04, 0.3, a.y), smoothstep(uFast.x, uFast.y, length(v))), smoothstep(uStr.x, uStr.y, st)));
+  // stretch of the new A and of B, each in full while its phase weight (uPhW) is 0.5 or more, then fading with it
+  // to 0 at its restart (a plain weighted mean would let half-weight stretched noise through as streaks)
+  float sa = smoothstep(uStr.x, uStr.y, stretch(uCrdO, h)) * min(1.0, 2.0 * uPhW.x);
+  float sb = uReset > 0.5 ? 0.0 : smoothstep(uStr.x, uStr.y, stretch(uCrd, h)) * min(1.0, 2.0 * uPhW.y);
+  o = vec4(phi, max(max(smoothstep(0.04, 0.3, a.y), smoothstep(uFast.x, uFast.y, length(v))), max(sa, sb)));
 }`;
 
 // The density copy into a TEXTURE_3D writes MRT layers (no gl_Layer in WebGL2): each draw attaches n consecutive
@@ -1262,11 +1267,17 @@ const max3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
 let vol3 = null, vMarchT = null, vNoise = null, grid2DText = '–';
 let volFail = ''; // grid that could not be built for this window ('' = the volume is ready)
 const V_RAYS = 6; // ray-march rays per grid cell; more add no detail (comp's tent filter smooths them anyway)
+const VOL_MIN_PX = 32; // Volym is frozen (no step, no new grid) while the window's short side is under this (CSS px)
+const VOL_SETTLE = 0.25; // s a resized window must keep its size before Volym moves the scene to a new grid
+let volSettle = 0; // s left until then
 // Volym's QUALITY row: the Kvalitet select, minus the rows the frame-rate governor has stepped down (governVolume),
 // never below Låg. The governor changes only this, never P.quality or the particle mode.
 const QKEYS = Object.keys(QUALITY);
 let volDrop = 0;
-const gov = { slow: 0, wait: 0 }; // s spent under VOL_FPS, s until the next step is allowed
+// t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more, wait: s until the next step is allowed,
+// fps0: frame rate before the last step down (0 = checked), hold: stepping down did not help, drops: steps down
+// from each row, ban: t until which the step up into each row is skipped
+const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, hold: false, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0) };
 const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
 function make3D(w, h, d, n = vMRT) {
@@ -1447,10 +1458,16 @@ function buildDetail(V) {
 }
 function build3D() {
   if (!volOK || !cssW) return false;
+  // A window collapsed to a sliver (an iframe or panel closing) freezes the scene in the grid it has: the solver in
+  // a grid a few cells across whips up cross-flow, which the per-axis stretch back to a normal grid multiplies.
+  if (Math.min(cssW, cssH) < VOL_MIN_PX) return false;
   const g = grid3D();
   if (!g) return volFailed('none');
   const old = vol3;
   if (!old || old.X !== g.X || old.Y !== g.Y || old.Z !== g.Z || old.cols !== g.cols) {
+    // While the window is still changing size (a drag, an animated panel, a rotation) the scene stays frozen in its
+    // grid and moves once the size has settled, so it is never stepped through the narrow grids in between.
+    if (old && volSettle > 0) return false;
     // a grid the driver refused is not retried every frame, only when the window or quality changes
     const key = [g.X, g.Y, g.Z, g.cols].join();
     if (key === volFail) return false;
@@ -1471,12 +1488,13 @@ function build3D() {
     if (vDet) buildDetail(V);
     vol3 = V;
     if (old) {
-      // velocity is in cells/s and the resample stretches each axis by its own grid ratio
+      // velocity is in cells/s and the resample stretches each axis by its own grid ratio (a rotation keeps its
+      // flow), capped at the emitters' top speed (step3D's vmax) so a very uneven stretch cannot blow it up
       const kv = [g.X / old.X, g.Y / old.Y, g.Z / old.Z, 1];
-      for (const [src, dst, m] of [[old.vel, V.vel, kv], [old.scal, V.scal, [1, 1, 1, 1]]]) {
+      for (const [src, dst, m, vm] of [[old.vel, V.vel, kv, 1.5 * g.Y], [old.scal, V.scal, [1, 1, 1, 1], 0]]) {
         use(pv.resample); atlasU();
         ut('uSrc', 0, src.read); ui3('uGo', old.X, old.Y, old.Z); ui('uColso', old.cols); uf('uAtlo', 1 / old.AW, 1 / old.AH);
-        uf('uMul', ...m);
+        uf('uMul', ...m); uf('uVmax', vm);
         draw(dst.read);
       }
       free3DSim(old);
@@ -1514,12 +1532,17 @@ function resize(force) {
   const d = Math.min(window.devicePixelRatio || 1, 2);
   if (!force && w === cssW && h === cssH && d === dpr) return;
   cssW = w; cssH = h; dpr = d; aspect = w / h;
-  gov.slow = 0;
+  volSettle = VOL_SETTLE;
+  // the governor starts over for the new window (a pending check of its last step waits for frames at this size)
+  gov.slow = gov.fast = 0; gov.hold = false; gov.drops.fill(0); gov.ban.fill(0);
+  if (gov.fps0) gov.wait = 3;
   canvas.width = Math.max(1, Math.round(w * d));
   canvas.height = Math.max(1, Math.round(h * d));
   buildSim();
   buildParticles();
   buildScreen();
+  // the Kvalitet menu lists the grid each row gives for this window shape
+  if (P.mode === 'volume') qualityLabels();
 }
 
 /* ------------------------------------------------------------------ */
@@ -1775,11 +1798,12 @@ function updateParticles(dt, time, frame) {
 // segments on the mid plane (z = Z/2): a held pointer gives a gentle upward jet, a moving one drags the smoke along.
 const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
 const emitRadius = () => P.brush * 1.6; // screen heights
-const V_TAU = 3.0; // density e-folding time per unit of Livslängd (s)
+const V_TAU = 3.7; // density e-folding time per unit of Livslängd (s)
+let volT = 0; // volume time (s): only step3D advances it, so the detail phases stand still with a frozen scene
 // Livslängd label in Volym: seconds until smoke no longer shows (alpha < 0.05) after it leaves the emitter, measured
 // at Hög with default lift. It saturates because old smoke spreads thin and rises off screen; coarser grids fade
-// sooner (Medel about 25 %, Låg about 35 %).
-const volLife = (v) => 10.9 * (1 - Math.exp(-v / 1.72));
+// sooner (Medel about 15 %, Låg about 25 %).
+const volLife = (v) => 8.6 * (1 - Math.exp(-v / 1.3));
 function emitterUniforms() {
   ui('uN', segN); uarr('uEA', 'uniform3fv', emA); uarr('uEB', 'uniform3fv', emB);
   const r = emitRadius() * vol3.Y;
@@ -1787,8 +1811,8 @@ function emitterUniforms() {
 }
 function step3D(dt, time) {
   const V = vol3, Y = V.Y, q = QUALITY[volLevel()];
-  V.simDt += dt; // the detail coordinates are advected by the simulated time at the next render
-  const gx =(u) => (u - 0.5) * aspect * Y + V.X / 2;
+  V.simDt += dt; volT += dt; // the detail coordinates are advected by the simulated time at the next render
+  const gx = (u) => (u - 0.5) * aspect * Y + V.X / 2;
   const kv = (0.7 * P.force * Y) / (cssH * Math.max(dt, 1e-3)), vmax = 1.5 * Y;
   for (let i = 0; i < segN; i++) {
     emA[i * 3] = gx(segA[i * 2]); emA[i * 3 + 1] = segA[i * 2 + 1] * Y; emA[i * 3 + 2] = V.Z / 2;
@@ -1941,7 +1965,7 @@ const V_EXT = 9;   // extinction per unit density per screen height
 // Sizes are in grid cells (the detail is sub-grid at every quality level, and the march steps one cell); speeds
 // are for a 112-cell screen height and scale with the grid like the solver's own velocities.
 const VT = { detail: 1, amp: 2.0, freq: 0.2, flowT: 1.2, oct2: 0.3, mod: 0.4, erode: 0, dlo: 0.04, dhi: 0.3, fast: [30, 60], str: [4.5, 8] };
-const V_KEY =(() => { const k = [0.45, 0.85, 0.28], l = Math.hypot(...k); return k.map((v) => v / l); })();
+const V_KEY = (() => { const k = [0.45, 0.85, 0.28], l = Math.hypot(...k); return k.map((v) => v / l); })();
 function render3D(frame) {
   const V = vol3;
   const box = [V.X / V.Y / 2, 0.5, V.Z / V.Y / 2];
@@ -1966,12 +1990,14 @@ function render3D(frame) {
 
   // 3. Detail: advect the two noise-coordinate phases by the simulated time, restarting a phase when its cycle wraps
   const det = VT.detail > 0 && !!V.crdA;
-  const ph = time / VT.flowT, cyc = [Math.floor(ph), Math.floor(ph + 0.5)];
+  // triangular phase weights (zero at each phase's restart), on the volume clock
+  const ph = volT / VT.flowT, cyc = [Math.floor(ph), Math.floor(ph + 0.5)];
+  const w0 = 1 - Math.abs(2 * (ph - cyc[0]) - 1), w1 = 1 - w0;
   if (det) {
     use(pv.crd); atlasU();
     ui3('uLg', V.LX, V.LY, V.LZ); ui('uLc', V.LC); uf('uLAtl', V.lit.tx, V.lit.ty);
     ut('uVel', 0, V.vel.read); ut3('uDen', 5, V.den3); uf('uDt', V.simDt);
-    uf('uFast', VT.fast[0] * V.Y / 112, VT.fast[1] * V.Y / 112); uf('uStr', VT.str[0], VT.str[1]);
+    uf('uFast', VT.fast[0] * V.Y / 112, VT.fast[1] * V.Y / 112); uf('uStr', VT.str[0], VT.str[1]); uf('uPhW', w0, w1);
     // phase A, then phase B (which also measures the stretch of the new A)
     [V.crdA, V.crdB].forEach((pp, i) => {
       ut('uCrd', 1, pp.read); ut('uCrdO', 2, V.crdA.read); ui('uCh', i);
@@ -1991,8 +2017,8 @@ function render3D(frame) {
   uf('uHot', ...hc); uf('uEmb', ...pal.ember); uf('uAlb', ...pal.alb); uf('uTail', ...pal.tail);
   uf('uAmb', ...pal.amb.map((v) => v * P.light)); uf('uKcol', ...keyC);
   if (det) {
-    // triangular phase weights (zero at each phase's restart), renormalised so the blend keeps its contrast
-    const f0 = ph - cyc[0], w0 = 1 - Math.abs(2 * f0 - 1), w1 = 1 - w0, wn = 1 / Math.hypot(w0, w1);
+    // the phase weights renormalised, so the blend keeps its contrast
+    const wn = 1 / Math.hypot(w0, w1);
     ut('uCrdA', 7, V.crdA.read); ut('uCrdB', 8, V.crdB.read); ut3('uNz', 9, vNoise);
     uf('uGc', V.X, V.Y, V.Z); uf('uPh', w0 * wn, w1 * wn);
     uf('uNo0', (cyc[0] * 0.137) % 1, (cyc[0] * 0.271) % 1, (cyc[0] * 0.419) % 1);
@@ -2033,32 +2059,53 @@ function clearAll() {
 /* Loop                                                               */
 /* ------------------------------------------------------------------ */
 let last = performance.now(), time = 0, frame = 0, fpsEMA = 60, hudT = 0;
+let volStepped = false; // this tick ran the volume solver (only those frames count for the governor)
 // Volym's frame-rate governor: when the frame rate stays under VOL_FPS for 2 s, the volume grid steps down one
-// QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. Picking a quality
-// starts over from that row; a mode switch or resize restarts the 2 s window (the frames around it are slow anyway).
-const VOL_FPS = 50;
+// QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. 3 s after a step
+// down it checks that the frame rate rose by 10 %; if not, the grid was not what held it back (the browser caps
+// requestAnimationFrame, e.g. at 30 Hz to save power, or another app loads the GPU), so the step is undone and it
+// stops stepping down until the next quality change or resize. After 5 s at VOL_FPS_UP or more it steps one row
+// back up, but a row it has stepped down from twice is skipped for 30 s (doubling with each further drop), so it
+// does not swing between two rows. Picking a quality starts over from that row; a mode switch or resize restarts
+// the timers (the frames around them are slow anyway).
+const VOL_FPS = 50, VOL_FPS_UP = 58;
 function governVolume(el) {
+  if (!volStepped) { gov.slow = gov.fast = 0; return; }
+  gov.t += el;
   gov.wait = Math.max(0, gov.wait - el);
-  if (P.mode !== 'volume' || !vol3 || volFail || P.paused || fpsEMA >= VOL_FPS) { gov.slow = 0; return; }
-  gov.slow += el;
-  if (gov.slow < 2 || gov.wait > 0 || volLevel() === QKEYS[0]) return;
-  volDrop++;
-  gov.slow = 0; gov.wait = 3;
+  if (gov.fps0 && !gov.wait) {
+    if (fpsEMA < gov.fps0 * 1.1) { volDrop--; gov.hold = true; gov.wait = 3; qualityLabels(); }
+    gov.fps0 = 0;
+  }
+  if (fpsEMA < VOL_FPS) { gov.slow += el; gov.fast = 0; }
+  else { gov.slow = 0; gov.fast = fpsEMA >= VOL_FPS_UP ? gov.fast + el : 0; }
+  if (gov.wait) return;
+  const r = QKEYS.indexOf(volLevel());
+  if (gov.slow >= 2 && !gov.hold && r > 0) {
+    if (++gov.drops[r] > 1) gov.ban[r] = gov.t + 30 * 2 ** (gov.drops[r] - 2);
+    volDrop++; gov.fps0 = fpsEMA;
+  } else if (gov.fast >= 5 && volDrop > 0 && gov.t >= gov.ban[r + 1]) {
+    volDrop--;
+  } else return;
+  gov.slow = gov.fast = 0; gov.wait = 3;
   qualityLabels();
 }
 function tick(dt) {
   resize(false);
+  volSettle = Math.max(0, volSettle - dt);
   if (!P.paused) { time += dt; updateDemo(dt); }
   const emitters = gather(dt, time);
   updateLight(dt, emitters);
   // Volym builds its targets on demand (so setting krakatoaDebug.P.mode directly also works). When they cannot
-  // be built for this window it shows its last state, frozen, and never falls back to the particle scene.
+  // be built for this window, the window is a sliver or it is still being resized, it shows its last state,
+  // frozen, and never falls back to the particle scene.
   const volMode = P.mode === 'volume' && volOK;
   const vol = volMode && build3D();
+  volStepped = false;
   if (!P.paused && vol === volMode) {
     // Each mode simulates only its own scene; the other one stays as it was until you switch back
     if (segN) { hue += dt * 0.035; if (!vol) splat(); }
-    if (vol) step3D(dt, time);
+    if (vol) { step3D(dt, time); volStepped = true; }
     else {
       step(dt, time);
       updateParticles(dt, time, frame);
@@ -2160,7 +2207,8 @@ function qualityLabels() {
 qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
-  volDrop = 0; gov.slow = 0; gov.wait = 0;
+  volDrop = 0;
+  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: false }); gov.drops.fill(0); gov.ban.fill(0);
   buildSim(); buildParticles(); buildScreen();
   qualityLabels();
 });
@@ -2186,7 +2234,8 @@ function setMode(m) {
   // M on a control that this mode hides: keep keyboard focus in the panel, on the button of the mode now shown
   if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
   if (sliderSync.life) sliderSync.life();
-  gov.slow = 0;
+  gov.slow = gov.fast = 0;
+  if (gov.fps0) gov.wait = 3;
   updateGridHud();
   qualityLabels();
   paintSwatches();

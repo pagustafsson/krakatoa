@@ -19,7 +19,7 @@ Gå sedan till `http://localhost:8000`.
 - **Partiklar**: miljontals fina partiklar som lyser ihop, med strängar och slöjor av rök.
 - **Volym**: rök i tre dimensioner. Gasen vid penseln är het och glöder, stiger av sig själv, svalnar och blir till rök som virvlar, skuggar sig själv och lyses upp av glöden. Med paletten Aurora glöder den gulgrönt och blir sedan upplyst blå.
 
-Byt läge med knappen överst i panelen eller med M. Första gången startar sidan i Partiklar, sedan sparas valt läge till nästa besök. Lägg till `#volym` eller `#partiklar` sist i adressen för att öppna ett visst läge direkt. Varje läge simulerar bara sin egen rök, så den andra står kvar orörd tills du byter tillbaka. Palettrutorna visar färgerna i det läge du är i.
+Byt läge med knappen överst i panelen eller med M. Första gången startar sidan i Partiklar, sedan sparas valt läge till nästa besök. Lägg till `#volym` eller `#partiklar` sist i adressen för att öppna ett visst läge direkt. Varje läge simulerar bara sin egen rök, så den andra står kvar tills du byter tillbaka. Rensa (C) tömmer dock båda lägena, och byter du kvalitet börjar Partiklar om från början. Palettrutorna visar färgerna i det läge du är i.
 
 ## Styrning
 
@@ -32,7 +32,7 @@ Byt läge med knappen överst i panelen eller med M. Första gången startar sid
 | M | Byt mellan Partiklar och Volym |
 | 1–5 | Byt palett: Aurora, Nebula, Magma, Spektrum, Aska |
 
-I panelen ställer du in kvalitet, pensel, flöde, ljus, skuggor och glöd. Kvaliteten bestämmer antalet partiklar i Partiklar och storleken på 3D-gridet i Volym. Gridet följer fönstrets form, och menyn visar det grid du får i ditt fönster. Så här blir det i ett fönster på 1920 × 1080:
+I panelen ställer du in kvalitet, pensel, flöde, ljus, skuggor och glöd. Kvaliteten bestämmer antalet partiklar i Partiklar och storleken på 3D-gridet i Volym. Gridet följer fönstrets form. I Volym visar menyn vilket grid varje kvalitet ger i fönstret som det ser ut just nu, och listan uppdateras när du ändrar fönstrets storlek. Så här blir det i ett fönster på 1920 × 1080:
 
 | Kvalitet | Partiklar | Volym |
 | --- | --- | --- |
@@ -45,7 +45,7 @@ Volym har två egna reglage, och Livslängd betyder något annat där:
 
 - **Avsvalning** styr hur snabbt den heta gasen svalnar. Ett kort värde ger en liten glödande låga. Ett långt värde låter gasen glöda och stiga längre.
 - **Lyftkraft** styr hur starkt het gas stiger, från 0 till 3 gånger det normala. På 0 stiger röken inte av sig själv.
-- **Livslängd** styr hur länge röken finns kvar och hur snabbt den går över i palettens äldsta färg. Värdet visar ungefär hur många sekunder röken syns efter att den lämnat penseln, från cirka 2 till 9 sekunder. Det planar ut eftersom gammal rök tunnas ut och stiger ut ur bilden. På lägre kvalitet försvinner röken lite tidigare.
+- **Livslängd** styr hur länge röken finns kvar och hur snabbt den går över i palettens äldsta färg. Värdet visar ungefär hur många sekunder röken syns efter att den lämnat penseln, från cirka 2 till 8 sekunder. Det planar ut eftersom gammal rök tunnas ut och stiger ut ur bilden. På lägre kvalitet försvinner röken lite tidigare.
 
 Reglagen Rökfält och Partikeltäthet och de två första brytarna under Lager gäller bara Partiklar och döljs i Volym.
 
@@ -60,14 +60,14 @@ Reglagen Rökfält och Partikeltäthet och de två första brytarna under Lager 
 
 ### Volym
 
-1. **3D-grid.** Röken simuleras i en låda bakom skärmen, uppdelad i kubiska celler: 56 till 128 celler på skärmens kortsida beroende på kvalitet, och två tredjedelar så många på djupet. Varje skiva i djupled ligger som en ruta i en stor 2D-textur, så att varje delsteg i lösaren blir ett enda ritanrop.
-2. **Transport.** Täthet, temperatur och färskhet (hur ny röken är) flyttas med strömningen enligt MacCormack-metoden, som behåller skarpare detaljer än en vanlig semi-Lagrange-lösare. Lådans sidor är öppna, så rök som lämnar den försvinner och ren luft strömmar in.
+1. **3D-grid.** Röken simuleras i en låda bakom skärmen, uppdelad i kubiska celler: 56 till 128 celler på skärmens kortsida beroende på kvalitet, och två tredjedelar så många på djupet. Varje skiva i djupled ligger som en ruta i en stor 2D-textur, så att varje delsteg i lösaren blir ett enda ritanrop. När fönstret ändrar storlek så att gridet måste bytas står röken still tills storleken har stannat, och flyttas sedan över till ett grid som passar det nya fönstret. Blir fönstrets kortsida smalare än 32 pixlar står röken still tills fönstret blir större igen.
+2. **Transport.** Täthet, temperatur och färskhet (hur ny röken är) flyttas med strömningen enligt MacCormack-metoden, som behåller skarpare detaljer än en vanlig semi-Lagrange-lösare. Där korrigeringen skjuter över grannvärdena används det vanliga värdet i stället, så att röken aldrig växer av sig själv. Lådans sidor är öppna, så rök som lämnar den försvinner och ren luft strömmar in.
 3. **Krafter.** Het gas stiger (Lyftkraft). Virvelförstärkningen (Virvlar) verkar bara där det finns rök, och ett mjukt turbulensfält (Turbulens) håller röken i rörelse. Penseln är en mjuk sfär i lådans mittplan som värmer gasen, fyller på rök och drar gasen med sig åt det håll du drar.
 4. **Tryck.** Luft går inte att pressa ihop. En tryckberäkning med 16 till 30 Jacobi-iterationer per bildruta, beroende på kvalitet, justerar hastigheterna så att lika mycket luft strömmar ut ur varje cell som in i den. Det är den som får röken att välla fram och rulla runt sig själv.
 5. **Ljus.** Varje bildruta kopieras tätheten till en 3D-textur. En ljusvolym i halva upplösningen räknar ut hur mycket ljus som når varje punkt från ett ljus i glödens färg vid pekaren och från ett toppljus snett ovanifrån, med skuggor genom röken.
 6. **Strålföljning.** En bild i lägre upplösning än skärmen skickar en stråle per pixel genom lådan, en cell i taget. Röken dämpar ljuset bakom sig, sprider ljuset från ljusvolymen mot kameran och glöder där den är het. Bilden skalas sedan mjukt upp till skärmen.
 7. **Detaljer finare än gridet.** I stora, svalnade rökmoln förskjuts tätheten med ett brus som följer strömningen, så att detaljerna töjs ut och virvlar med röken. Bruset finns i två omgångar som startar om var 1,2 sekund, förskjutna en halv period, och tonas över i varandra så att det aldrig hinner töjas ut för mycket. Den heta lågan och snabba strålar får inget brus.
-8. **Automatisk kvalitet.** Om bildfrekvensen ligger under 50 bilder per sekund i två sekunder byter Volym till ett grövre grid, högst ett steg var tredje sekund och aldrig under Låg. Röken flyttas över till det nya gridet. Rubriken Kvalitet visar då ”sänkt till …” och raden längst ned till vänster visar det grid som körs. Väljer du en kvalitet i menyn börjar Volym om från den nivån. Partiklar påverkas inte.
+8. **Automatisk kvalitet.** Om bildfrekvensen ligger under 50 bilder per sekund i två sekunder byter Volym till ett grövre grid, högst ett steg var tredje sekund och aldrig under Låg. Röken flyttas över till det nya gridet. Rubriken Kvalitet visar då ”sänkt till …” och raden längst ned till vänster visar det grid som körs. Tre sekunder efter ett steg kontrolleras att bildfrekvensen har ökat med minst 10 procent. Gör den inte det var det inte gridet som begränsade, till exempel när webbläsaren låser sidan till 30 bilder per sekund för att spara ström. Då tas steget tillbaka och Volym slutar sänka tills du byter kvalitet eller ändrar fönstrets storlek. Ligger bildfrekvensen på 58 eller mer i fem sekunder går Volym upp ett steg igen. En nivå som har fått sänkas två gånger hoppas över i 30 sekunder, och tiden fördubblas för varje ny sänkning, så att kvaliteten inte pendlar fram och tillbaka. Byter du kvalitet i menyn börjar Volym om från den nivån. Partiklar påverkas inte.
 
 Båda lägena avslutas likadant: HDR-bild med glöd, ACES-tonmappning, vinjett och dithering.
 
