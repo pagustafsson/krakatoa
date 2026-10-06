@@ -737,9 +737,11 @@ void main() {
 }`,
 
   // MacCormack step 2: trace the result forward again and correct by half the round-trip error. Where the
-  // corrected value leaves the source cell's neighbourhood it falls back to the semi-Lagrangian value (a clamp
-  // there would keep overshoots and gain mass). Then decay, and the emitters: noisy density is added,
-  // temperature and freshness are set to the brush profile.
+  // corrected value overshoots the source cell's neighbourhood it falls back to the semi-Lagrangian value (a clamp
+  // to the maximum would keep the overshoot); where it undershoots it is clamped to the neighbourhood minimum (a
+  // fallback would lift it back up at every plume edge). Each picks the lower of the two options, so the limiter
+  // does not add mass. Then decay, and the emitters: noisy density is added, temperature and freshness are set to
+  // the brush profile.
   advS2: V_ATLAS + V_BRUSH + V_NOISE + `uniform sampler2D uVel, uSrc, uHat; uniform float uDt, uDRate, uDMax, uTRate, uTime; uniform vec3 uDecay;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
@@ -757,7 +759,7 @@ void main() {
   lo *= wi; hi *= wi;
   vec4 hat = texelFetch(uHat, texOf(c), 0);
   vec4 s = hat + 0.5 * (texelFetch(uSrc, texOf(c), 0) - S(uHat, p + uDt * v));
-  s = mix(s, hat, max(step(s, lo - 1e-6), step(hi + 1e-6, s)));
+  s = mix(max(s, lo), hat, step(hi + 1e-6, s));
   s.xyz *= uDecay;
   vec3 rel; int bi;
   float w = brush(p, rel, bi);
@@ -859,12 +861,16 @@ void main() {
   o = vec4(F(uVel, c).xyz - g, 0.0);
 }`,
 
-  // Resize / quality change: resample an old atlas (grid uGo, uColso tiles per row) into the current grid.
-  // Velocity (uVmax > 0) is capped at uVmax cells/s, so a very uneven per-axis stretch cannot blow it up.
-  resample: V_ATLAS + `uniform sampler2D uSrc; uniform ivec3 uGo; uniform int uColso; uniform vec2 uAtlo; uniform vec4 uMul; uniform float uVmax;
+  // Resize / quality change: resample an old atlas (grid uGo, uColso tiles per row) into the current grid. With
+  // uK = 0 each axis is stretched by its own grid ratio; with uK > 0 a new cell spans uK old cells about the
+  // centre (the scene keeps its size on screen) and what falls outside the old box is empty. Velocity (uVmax > 0)
+  // is capped at uVmax cells/s, so a very uneven per-axis stretch cannot blow it up.
+  resample: V_ATLAS + `uniform sampler2D uSrc; uniform ivec3 uGo; uniform int uColso; uniform vec2 uAtlo; uniform vec4 uMul; uniform float uVmax, uK;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
-  o = Sx(uSrc, (vec3(c) + 0.5) / vec3(uG) * vec3(uGo), uGo, uColso, uAtlo) * uMul;
+  vec3 p = uK > 0.0 ? (vec3(c) + 0.5 - 0.5 * vec3(uG)) * uK + 0.5 * vec3(uGo) : (vec3(c) + 0.5) / vec3(uG) * vec3(uGo);
+  if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(uGo)))) { o = vec4(0.0); return; }
+  o = Sx(uSrc, p, uGo, uColso, uAtlo) * uMul;
   if (uVmax > 0.0) o.xyz *= min(1.0, uVmax / max(length(o.xyz), 1e-6));
 }`,
 
@@ -1275,9 +1281,10 @@ let volSettle = 0; // s left until then
 const QKEYS = Object.keys(QUALITY);
 let volDrop = 0;
 // t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more, wait: s until the next step is allowed,
-// fps0: frame rate before the last step down (0 = checked), hold: stepping down did not help, drops: steps down
-// from each row, ban: t until which the step up into each row is skipped
-const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, hold: false, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0) };
+// fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked), hold: t until which it
+// does not step down (a step down did not help), fails: such steps in a row, drops: confirmed steps down from each
+// row, ban: t until which the step up into each row is skipped
+const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0) };
 const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
 function make3D(w, h, d, n = vMRT) {
@@ -1472,6 +1479,7 @@ function build3D() {
     const key = [g.X, g.Y, g.Z, g.cols].join();
     if (key === volFail) return false;
     const V = g;
+    V.pxc = cssH / g.Y; V.short = Math.min(cssW, cssH); // CSS px per cell, short side (for the next resample)
     V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2); V.LC = tileCols(V.LX, V.LY, V.LZ);
     V.vel = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
     V.scal = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
@@ -1488,13 +1496,17 @@ function build3D() {
     if (vDet) buildDetail(V);
     vol3 = V;
     if (old) {
-      // velocity is in cells/s and the resample stretches each axis by its own grid ratio (a rotation keeps its
-      // flow), capped at the emitters' top speed (step3D's vmax) so a very uneven stretch cannot blow it up
-      const kv = [g.X / old.X, g.Y / old.Y, g.Z / old.Z, 1];
+      // velocity is in cells/s. While the short side stays about the same (a rotation, a quality step) the
+      // resample stretches each axis by its own grid ratio, so a rotation keeps its flow. When it changes more
+      // (a window held narrow and restored) that stretch would blow a plume that filled the small box up into a
+      // sideways sheet, so the scene keeps its size on screen instead, centred. Either way velocity is capped at
+      // the emitters' top speed (step3D's vmax).
+      const sr = V.short / old.short, uk = sr > 1.5 || sr < 1 / 1.5 ? V.pxc / old.pxc : 0;
+      const kv = uk ? [1 / uk, 1 / uk, 1 / uk, 1] : [g.X / old.X, g.Y / old.Y, g.Z / old.Z, 1];
       for (const [src, dst, m, vm] of [[old.vel, V.vel, kv, 1.5 * g.Y], [old.scal, V.scal, [1, 1, 1, 1], 0]]) {
         use(pv.resample); atlasU();
         ut('uSrc', 0, src.read); ui3('uGo', old.X, old.Y, old.Z); ui('uColso', old.cols); uf('uAtlo', 1 / old.AW, 1 / old.AH);
-        uf('uMul', ...m); uf('uVmax', vm);
+        uf('uMul', ...m); uf('uVmax', vm); uf('uK', uk);
         draw(dst.read);
       }
       free3DSim(old);
@@ -1531,10 +1543,17 @@ function resize(force) {
   const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
   const d = Math.min(window.devicePixelRatio || 1, 2);
   if (!force && w === cssW && h === cssH && d === dpr) return;
+  // the autopilot's brush is in CSS px: scale it with the window, so its next stroke does not cross the screen
+  // from where it was in the old size (after a collapse to a sliver, a jet from the edge)
+  if (cssW && cssH) {
+    const sx = w / cssW, sy = h / cssH, p = demo.p;
+    p.prevX *= sx; p.prevY *= sy; p.x *= sx; p.y *= sy;
+    for (let i = 0; i < p.path.length; i += 2) { p.path[i] *= sx; p.path[i + 1] *= sy; }
+  }
   cssW = w; cssH = h; dpr = d; aspect = w / h;
   volSettle = VOL_SETTLE;
   // the governor starts over for the new window (a pending check of its last step waits for frames at this size)
-  gov.slow = gov.fast = 0; gov.hold = false; gov.drops.fill(0); gov.ban.fill(0);
+  gov.slow = gov.fast = 0; gov.hold = gov.fails = 0; gov.drops.fill(0); gov.ban.fill(0);
   if (gov.fps0) gov.wait = 3;
   canvas.width = Math.max(1, Math.round(w * d));
   canvas.height = Math.max(1, Math.round(h * d));
@@ -1798,12 +1817,12 @@ function updateParticles(dt, time, frame) {
 // segments on the mid plane (z = Z/2): a held pointer gives a gentle upward jet, a moving one drags the smoke along.
 const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
 const emitRadius = () => P.brush * 1.6; // screen heights
-const V_TAU = 3.7; // density e-folding time per unit of Livslängd (s)
+const V_TAU = 4.1; // density e-folding time per unit of Livslängd (s)
 let volT = 0; // volume time (s): only step3D advances it, so the detail phases stand still with a frozen scene
 // Livslängd label in Volym: seconds until smoke no longer shows (alpha < 0.05) after it leaves the emitter, measured
-// at Hög with default lift. It saturates because old smoke spreads thin and rises off screen; coarser grids fade
-// sooner (Medel about 15 %, Låg about 25 %).
-const volLife = (v) => 8.6 * (1 - Math.exp(-v / 1.3));
+// at Hög with default lift (mean over stops at 3–4.7 s of autopilot). It saturates because old smoke spreads thin
+// and rises off screen; coarser grids fade sooner (Medel about 20 %, Låg about 25 %).
+const volLife = (v) => 7.8 * (1 - Math.exp(-v / 0.92));
 function emitterUniforms() {
   ui('uN', segN); uarr('uEA', 'uniform3fv', emA); uarr('uEB', 'uniform3fv', emB);
   const r = emitRadius() * vol3.Y;
@@ -2064,26 +2083,29 @@ let volStepped = false; // this tick ran the volume solver (only those frames co
 // QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. 3 s after a step
 // down it checks that the frame rate rose by 10 %; if not, the grid was not what held it back (the browser caps
 // requestAnimationFrame, e.g. at 30 Hz to save power, or another app loads the GPU), so the step is undone and it
-// stops stepping down until the next quality change or resize. After 5 s at VOL_FPS_UP or more it steps one row
-// back up, but a row it has stepped down from twice is skipped for 30 s (doubling with each further drop), so it
-// does not swing between two rows. Picking a quality starts over from that row; a mode switch or resize restarts
-// the timers (the frames around them are slow anyway).
+// does not step down for 30 s, doubling with each such failure in a row (at most 4 min). A step down that helped
+// keeps it out of the row it left for 20 s, doubling with each further drop from that row (at most 4 min), so it
+// does not swing between two rows; after that, 5 s at VOL_FPS_UP or more steps one row back up. Picking a quality
+// starts over from that row; a mode switch or resize restarts the timers (the frames around them are slow anyway).
 const VOL_FPS = 50, VOL_FPS_UP = 58;
 function governVolume(el) {
   if (!volStepped) { gov.slow = gov.fast = 0; return; }
   gov.t += el;
   gov.wait = Math.max(0, gov.wait - el);
   if (gov.fps0 && !gov.wait) {
-    if (fpsEMA < gov.fps0 * 1.1) { volDrop--; gov.hold = true; gov.wait = 3; qualityLabels(); }
+    if (fpsEMA < gov.fps0 * 1.1) {
+      volDrop--; gov.hold = gov.t + Math.min(240, 30 * 2 ** gov.fails++); gov.wait = 3; qualityLabels();
+    } else {
+      gov.fails = 0; gov.ban[gov.r0] = gov.t + Math.min(240, 20 * 2 ** gov.drops[gov.r0]++);
+    }
     gov.fps0 = 0;
   }
   if (fpsEMA < VOL_FPS) { gov.slow += el; gov.fast = 0; }
   else { gov.slow = 0; gov.fast = fpsEMA >= VOL_FPS_UP ? gov.fast + el : 0; }
   if (gov.wait) return;
   const r = QKEYS.indexOf(volLevel());
-  if (gov.slow >= 2 && !gov.hold && r > 0) {
-    if (++gov.drops[r] > 1) gov.ban[r] = gov.t + 30 * 2 ** (gov.drops[r] - 2);
-    volDrop++; gov.fps0 = fpsEMA;
+  if (gov.slow >= 2 && gov.t >= gov.hold && r > 0) {
+    volDrop++; gov.fps0 = fpsEMA; gov.r0 = r;
   } else if (gov.fast >= 5 && volDrop > 0 && gov.t >= gov.ban[r + 1]) {
     volDrop--;
   } else return;
@@ -2124,10 +2146,14 @@ function loop(now) {
   const dt = Math.min(Math.max(el, 0.001), 1 / 30);
   last = now;
   tick(dt);
-  fpsEMA += (1 / Math.max((now - (loop.prev || now - 16.7)) / 1000, 1e-3) - fpsEMA) * 0.05;
+  // frame rate averaged over wall time (0.4 s), not over frames: it is as current at 7 fps as at 60, and each
+  // frame weighs by its length, so alternating 16.7 and 33.3 ms frames read 40, the frames actually shown per s
+  const fe = Math.min(Math.max((now - (loop.prev || now - 16.7)) / 1000, 1e-3), 0.5);
+  fpsEMA += (1 / fe - fpsEMA) * (1 - Math.exp(-fe / 0.4));
   loop.prev = now;
-  governVolume(Math.min(Math.max(el, 0), 0.25));
-  if ((hudT += dt) > 0.5) { hudT = 0; $('hudFps').textContent = Math.round(fpsEMA); }
+  const wall = Math.min(Math.max(el, 0), 0.25);
+  governVolume(wall);
+  if ((hudT += wall) > 0.5) { hudT = 0; $('hudFps').textContent = Math.round(fpsEMA); }
 }
 // Test hook: advance the simulation a fixed number of frames synchronously, independent of
 // requestAnimationFrame throttling. krakatoaDebug.run(240) = 4 s of autopilot at 60 fps.
@@ -2208,7 +2234,7 @@ qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
   volDrop = 0;
-  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: false }); gov.drops.fill(0); gov.ban.fill(0);
+  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0 }); gov.drops.fill(0); gov.ban.fill(0);
   buildSim(); buildParticles(); buildScreen();
   qualityLabels();
 });
