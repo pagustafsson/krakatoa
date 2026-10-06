@@ -1283,8 +1283,9 @@ let volDrop = 0;
 // t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more, wait: s until the next step is allowed,
 // fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked), hold: t until which it
 // does not step down (a step down did not help), fails: such steps in a row, drops: confirmed steps down from each
-// row, ban: t until which the step up into each row is skipped
-const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0) };
+// row, ban: t until which the step up into each row is skipped, n, s: frames counted and their length in s (the
+// frame rate the steps are judged by), skip: frames still to leave out of that count
+const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, skip: 2 };
 const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
 function make3D(w, h, d, n = vMRT) {
@@ -1466,7 +1467,7 @@ function buildDetail(V) {
 function build3D() {
   if (!volOK || !cssW) return false;
   // A window collapsed to a sliver (an iframe or panel closing) freezes the scene in the grid it has: the solver in
-  // a grid a few cells across whips up cross-flow, which the per-axis stretch back to a normal grid multiplies.
+  // a grid a few cells across whips up cross-flow, which would come back with the scene when the window does.
   if (Math.min(cssW, cssH) < VOL_MIN_PX) return false;
   const g = grid3D();
   if (!g) return volFailed('none');
@@ -1479,7 +1480,7 @@ function build3D() {
     const key = [g.X, g.Y, g.Z, g.cols].join();
     if (key === volFail) return false;
     const V = g;
-    V.pxc = cssH / g.Y; V.short = Math.min(cssW, cssH); // CSS px per cell, short side (for the next resample)
+    V.pxc = cssH / g.Y; V.w = cssW; V.h = cssH; // CSS px per cell, window size (for the next resample)
     V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2); V.LC = tileCols(V.LX, V.LY, V.LZ);
     V.vel = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
     V.scal = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
@@ -1496,12 +1497,13 @@ function build3D() {
     if (vDet) buildDetail(V);
     vol3 = V;
     if (old) {
-      // velocity is in cells/s. While the short side stays about the same (a rotation, a quality step) the
-      // resample stretches each axis by its own grid ratio, so a rotation keeps its flow. When it changes more
-      // (a window held narrow and restored) that stretch would blow a plume that filled the small box up into a
-      // sideways sheet, so the scene keeps its size on screen instead, centred. Either way velocity is capped at
-      // the emitters' top speed (step3D's vmax).
-      const sr = V.short / old.short, uk = sr > 1.5 || sr < 1 / 1.5 ? V.pxc / old.pxc : 0;
+      // velocity is in cells/s. A rotation (width and height about swapped) stretches each axis by its own grid
+      // ratio, so the scene fills the turned screen and keeps its flow. Every other change (a quality step, a
+      // resize) keeps the scene's size on screen, centred: stretching it with the window would blow a plume that
+      // filled a narrow box up into a sideways sheet, and so would a few smaller stretches in a row (a window
+      // widened in steps). Either way velocity is capped at the emitters' top speed (step3D's vmax).
+      const rot = (cssW > cssH) !== (old.w > old.h) && Math.abs(cssW / old.h - 1) < 0.3 && Math.abs(cssH / old.w - 1) < 0.3;
+      const uk = rot ? 0 : V.pxc / old.pxc;
       const kv = uk ? [1 / uk, 1 / uk, 1 / uk, 1] : [g.X / old.X, g.Y / old.Y, g.Z / old.Z, 1];
       for (const [src, dst, m, vm] of [[old.vel, V.vel, kv, 1.5 * g.Y], [old.scal, V.scal, [1, 1, 1, 1], 0]]) {
         use(pv.resample); atlasU();
@@ -1553,7 +1555,7 @@ function resize(force) {
   cssW = w; cssH = h; dpr = d; aspect = w / h;
   volSettle = VOL_SETTLE;
   // the governor starts over for the new window (a pending check of its last step waits for frames at this size)
-  gov.slow = gov.fast = 0; gov.hold = gov.fails = 0; gov.drops.fill(0); gov.ban.fill(0);
+  gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2; gov.hold = gov.fails = 0; gov.drops.fill(0); gov.ban.fill(0);
   if (gov.fps0) gov.wait = 3;
   canvas.width = Math.max(1, Math.round(w * d));
   canvas.height = Math.max(1, Math.round(h * d));
@@ -2081,35 +2083,49 @@ let last = performance.now(), time = 0, frame = 0, fpsEMA = 60, hudT = 0;
 let volStepped = false; // this tick ran the volume solver (only those frames count for the governor)
 // Volym's frame-rate governor: when the frame rate stays under VOL_FPS for 2 s, the volume grid steps down one
 // QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. 3 s after a step
-// down it checks that the frame rate rose by 10 %; if not, the grid was not what held it back (the browser caps
-// requestAnimationFrame, e.g. at 30 Hz to save power, or another app loads the GPU), so the step is undone and it
-// does not step down for 30 s, doubling with each such failure in a row (at most 4 min). A step down that helped
-// keeps it out of the row it left for 20 s, doubling with each further drop from that row (at most 4 min), so it
-// does not swing between two rows; after that, 5 s at VOL_FPS_UP or more steps one row back up. Picking a quality
-// starts over from that row; a mode switch or resize restarts the timers (the frames around them are slow anyway).
+// down, and after at least 3 frames in the new grid, it checks that the frame rate rose by 10 %; if not, the grid
+// was not what held it back (the browser caps requestAnimationFrame, e.g. at 30 Hz to save power, or another app
+// loads the GPU), so the step is undone and it does not step down for 30 s, doubling with each such failure in a
+// row (at most 4 min). A step down that helped keeps it out of the row it left for 20 s, doubling with each
+// further drop from that row (at most 4 min), so it does not swing between two rows; after that, 5 s at
+// VOL_FPS_UP or more steps one row back up. Picking a quality starts over from that row; a mode switch or resize
+// restarts the timers (the frames around them are slow anyway). Both frame rates in the check are frames per s
+// over whole frames (before the step: the slow spell; after it: the last 2 s of the wait), as at 1–3 fps fpsEMA
+// holds only the last frame or two. The clocks run in wall time, so the waits are the same at any frame rate;
+// slow and fast count at most 0.25 s a frame, so one hitch is not 2 s of slowness.
 const VOL_FPS = 50, VOL_FPS_UP = 58;
 function governVolume(el) {
-  if (!volStepped) { gov.slow = gov.fast = 0; return; }
-  gov.t += el;
-  gov.wait = Math.max(0, gov.wait - el);
-  if (gov.fps0 && !gov.wait) {
-    if (fpsEMA < gov.fps0 * 1.1) {
+  // el: the frame's length in s, 0 for the first frame after a pause. The count leaves out the first two frames
+  // after a grid change, a resize or a frame that did not step the volume: their time is the old grid's last
+  // frame, the resample or the frame in between.
+  if (!volStepped || !el) { gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2; return; }
+  const w = Math.min(el, 2), h = Math.min(el, 0.25);
+  gov.t += w;
+  gov.wait = Math.max(0, gov.wait - w);
+  if (gov.skip) gov.skip--;
+  else if (gov.wait <= 2) { gov.n++; gov.s += el; }
+  if (gov.fps0 && !gov.wait && gov.n >= 3) {
+    if (gov.n / gov.s < gov.fps0 * 1.1) {
       volDrop--; gov.hold = gov.t + Math.min(240, 30 * 2 ** gov.fails++); gov.wait = 3; qualityLabels();
+      gov.n = gov.s = 0; gov.skip = 2;
     } else {
       gov.fails = 0; gov.ban[gov.r0] = gov.t + Math.min(240, 20 * 2 ** gov.drops[gov.r0]++);
     }
     gov.fps0 = 0;
   }
-  if (fpsEMA < VOL_FPS) { gov.slow += el; gov.fast = 0; }
-  else { gov.slow = 0; gov.fast = fpsEMA >= VOL_FPS_UP ? gov.fast + el : 0; }
-  if (gov.wait) return;
+  if (fpsEMA < VOL_FPS) { gov.slow += h; gov.fast = 0; }
+  else {
+    gov.slow = 0; gov.fast = fpsEMA >= VOL_FPS_UP ? gov.fast + h : 0;
+    if (!gov.fps0) gov.n = gov.s = 0; // the count for a step down covers the slow spell only
+  }
+  if (gov.wait || gov.fps0) return;
   const r = QKEYS.indexOf(volLevel());
-  if (gov.slow >= 2 && gov.t >= gov.hold && r > 0) {
-    volDrop++; gov.fps0 = fpsEMA; gov.r0 = r;
+  if (gov.slow >= 2 && gov.n >= 3 && gov.t >= gov.hold && r > 0) {
+    volDrop++; gov.fps0 = gov.n / gov.s; gov.r0 = r;
   } else if (gov.fast >= 5 && volDrop > 0 && gov.t >= gov.ban[r + 1]) {
     volDrop--;
   } else return;
-  gov.slow = gov.fast = 0; gov.wait = 3;
+  gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2; gov.wait = 3;
   qualityLabels();
 }
 function tick(dt) {
@@ -2146,15 +2162,19 @@ function loop(now) {
   const dt = Math.min(Math.max(el, 0.001), 1 / 30);
   last = now;
   tick(dt);
-  // frame rate averaged over wall time (0.4 s), not over frames: it is as current at 7 fps as at 60, and each
-  // frame weighs by its length, so alternating 16.7 and 33.3 ms frames read 40, the frames actually shown per s
-  const fe = Math.min(Math.max((now - (loop.prev || now - 16.7)) / 1000, 1e-3), 0.5);
-  fpsEMA += (1 / fe - fpsEMA) * (1 - Math.exp(-fe / 0.4));
+  // frame rate averaged over wall time (0.4 s), not over frames: it is as current at 1 fps as at 60, and each
+  // frame weighs by its length, so alternating 16.7 and 33.3 ms frames read 40, the frames actually shown per s.
+  // A gap of 5 s or more, or the first frame after the tab was hidden, is a pause, not a frame (gap 0).
+  const gap = loop.prev && now - loop.prev < 5000 ? Math.max(now - loop.prev, 1) / 1000 : 0;
   loop.prev = now;
-  const wall = Math.min(Math.max(el, 0), 0.25);
-  governVolume(wall);
-  if ((hudT += wall) > 0.5) { hudT = 0; $('hudFps').textContent = Math.round(fpsEMA); }
+  if (gap) fpsEMA += (1 / gap - fpsEMA) * (1 - Math.exp(-gap / 0.4));
+  governVolume(gap);
+  if ((hudT += Math.min(gap, 2)) > 0.5) {
+    hudT = 0;
+    $('hudFps').textContent = fpsEMA < 9.95 ? fpsEMA.toFixed(1).replace('.', ',') : Math.round(fpsEMA);
+  }
 }
+document.addEventListener('visibilitychange', () => { loop.prev = 0; });
 // Test hook: advance the simulation a fixed number of frames synchronously, independent of
 // requestAnimationFrame throttling. krakatoaDebug.run(240) = 4 s of autopilot at 60 fps.
 // krakatoaDebug.setMode('particles' | 'volume') switches mode like the panel does.
@@ -2234,7 +2254,7 @@ qSel.value = P.quality;
 qSel.addEventListener('change', () => {
   P.quality = qSel.value;
   volDrop = 0;
-  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0 }); gov.drops.fill(0); gov.ban.fill(0);
+  Object.assign(gov, { slow: 0, fast: 0, wait: 0, fps0: 0, hold: 0, fails: 0, n: 0, s: 0, skip: 2 }); gov.drops.fill(0); gov.ban.fill(0);
   buildSim(); buildParticles(); buildScreen();
   qualityLabels();
 });
@@ -2260,7 +2280,7 @@ function setMode(m) {
   // M on a control that this mode hides: keep keyboard focus in the panel, on the button of the mode now shown
   if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
   if (sliderSync.life) sliderSync.life();
-  gov.slow = gov.fast = 0;
+  gov.slow = gov.fast = gov.n = gov.s = 0; gov.skip = 2;
   if (gov.fps0) gov.wait = 3;
   updateGridHud();
   qualityLabels();
