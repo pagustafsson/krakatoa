@@ -1307,13 +1307,13 @@ let volSettle = 0; // s left until then
 const QKEYS = Object.keys(QUALITY);
 let volDrop = 0;
 // t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more (lower under a cap), wait: s until the
-// next step is allowed, fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked),
-// hold: t until which it does not step down (a step down did not help), fails: such steps in a row, drops:
-// confirmed steps down from each row, ban: t until which the step up into each row is skipped, n, s, fr: frames
-// counted, their length in s and the lengths one by one (the last 2 s, at least 3 frames: the frame rate the steps
-// are judged by), skip: frames still to leave out of that count, cap: frame rate a step down did not raise (0 =
-// none), lift: s spent 15 % over it
-const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, fr: [], skip: 2, cap: 0, lift: 0 };
+// next step is allowed, fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked), hold,
+// hr: t until which it does not step down from row hr (a step down from it did not help), fails: such steps from hr
+// in a row, drops: confirmed steps down from each row, ban: t until which the step up into each row is skipped, n,
+// s, fr: frames counted, their length in s and the lengths one by one (the last 2 s, at least 3 frames: the frame
+// rate the steps are judged by), skip: frames still to leave out of that count, cap: frame rate a step down did not
+// raise (0 = none; it ends with the hold), lift: s spent 15 % over it
+const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, hr: -1, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, fr: [], skip: 2, cap: 0, lift: 0 };
 const volLevel = (sel = P.quality) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
 function make3D(w, h, d, n = vMRT) {
@@ -2140,18 +2140,21 @@ let volStepped = false; // this tick ran the volume solver (only those frames co
 // QUALITY row (at most once per 3 s, never below Låg) and build3D resamples the scene into it. 3 s after a step
 // down, and after at least 3 frames in the new grid, it checks that the frame rate rose by 10 %; if not, the grid
 // was not what held it back (the browser caps requestAnimationFrame, e.g. at 30 Hz to save power, or another app
-// loads the GPU), so the step is undone and it does not step down for 30 s, doubling with each such failure in a row
-// (at most 4 min). The frame rate it had in the lower grid is then taken as a cap (gov.cap): until the frame rate
-// stays 15 % over it for 2 s (the cap was lifted), slow means under 85 % of the cap and fast 95 % of it or more
-// (never more than VOL_FPS and VOL_FPS_UP), so under a 30 Hz cap 30 fps counts as good and it does not probe the
-// rows below again and again. A step down that helped keeps it out of the row it left for 20 s, doubling with each
-// further drop from that row (at most 4 min), so it does not swing between two rows; after that, 5 s fast steps one
-// row back up. Picking a quality starts over from that row, without a cap; a mode switch or resize restarts the
-// timers (the frames around them are slow anyway), and a resize forgets the cap. Both frame rates in the check are
-// frames per s over the last 2 s of whole frames, at least 3 (before the step: of the slow spell, so a slowdown
-// earlier in a long spell cannot make a useless step look like a gain; after it: of the wait), as at 1–3 fps fpsEMA
-// holds only the last frame or two. The clocks run in wall time, so the waits are the same at any frame rate; slow,
-// fast and the cap's lift count at most 0.25 s a frame, so one hitch is not 2 s of slowness.
+// loads the GPU), so the step is undone and it does not step down from that row for 30 s (the hold), doubling with
+// each further such failure from that row (at most 4 min); a row above it that it steps up into and finds slow still
+// steps down as usual. The frame rate it had in the lower grid is then taken as a cap (gov.cap): until the hold ends
+// or the frame rate stays 15 % over it for 2 s (the cap was lifted), slow means under 85 % of the cap and fast 95 %
+// of it or more (never more than VOL_FPS and VOL_FPS_UP), so under a 30 Hz cap 30 fps counts as good and it does not
+// probe the rows below again and again. A grid that only just reaches the cap's rate never shows that the cap was
+// lifted, so the cap ends with the hold and the next step down finds out. A step down that helped keeps it out of
+// the row it left for 20 s, doubling with each further drop from that row (at most 4 min), so it does not swing
+// between two rows; after that, 5 s fast steps one row back up. Picking a quality starts over from that row, without
+// a cap; a mode switch or resize restarts the timers (the frames around them are slow anyway), and a resize forgets
+// the cap. Both frame rates in the check are frames per s over the last 2 s of whole frames, at least 3 (before the
+// step: of the slow spell, so a slowdown earlier in a long spell cannot make a useless step look like a gain; after
+// it: of the wait), as at 1–3 fps fpsEMA holds only the last frame or two. The clocks run in wall time, so the waits
+// are the same at any frame rate; slow, fast and the cap's lift count at most 0.25 s a frame, so one hitch is not
+// 2 s of slowness.
 const VOL_FPS = 50, VOL_FPS_UP = 58;
 function governVolume(el) {
   // el: the frame's length in s, 0 for the first frame after a pause. The count leaves out the first two frames
@@ -2169,16 +2172,19 @@ function governVolume(el) {
   }
   if (gov.fps0 && !gov.wait && gov.n >= 3) {
     if (gov.n / gov.s < gov.fps0 * 1.1) {
-      volDrop--; gov.hold = gov.t + Math.min(240, 30 * 2 ** gov.fails++); gov.wait = 3; qualityLabels();
+      if (gov.r0 !== gov.hr) gov.fails = 0; // the back-off is the row's: it doubles while the same row fails
+      volDrop--; gov.hold = gov.t + Math.min(240, 30 * 2 ** gov.fails++); gov.hr = gov.r0; gov.wait = 3; qualityLabels();
       gov.cap = gov.n / gov.s; gov.lift = 0; // a rate the grid did not limit
       gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
     } else {
-      // kept: the count goes on, its frames are this grid's
-      gov.fails = 0; gov.ban[gov.r0] = gov.t + Math.min(240, 20 * 2 ** gov.drops[gov.r0]++);
+      // kept: the count goes on, its frames are this grid's. Only a step down from hr that helped ends its back-off
+      // (one from a row above it, stepped up into under the cap, says nothing about hr).
+      if (gov.r0 === gov.hr) gov.fails = 0;
+      gov.ban[gov.r0] = gov.t + Math.min(240, 20 * 2 ** gov.drops[gov.r0]++);
     }
     gov.fps0 = 0;
   }
-  if (gov.cap) { gov.lift = fpsEMA > 1.15 * gov.cap ? gov.lift + h : 0; if (gov.lift >= 2) gov.cap = 0; }
+  if (gov.cap) { gov.lift = fpsEMA > 1.15 * gov.cap ? gov.lift + h : 0; if (gov.lift >= 2 || gov.t >= gov.hold) gov.cap = 0; }
   const lo = gov.cap ? Math.min(VOL_FPS, 0.85 * gov.cap) : VOL_FPS, up = gov.cap ? Math.min(VOL_FPS_UP, 0.95 * gov.cap) : VOL_FPS_UP;
   if (fpsEMA < lo) { gov.slow += h; gov.fast = 0; }
   else {
@@ -2187,7 +2193,7 @@ function governVolume(el) {
   }
   if (gov.wait || gov.fps0) return;
   const r = QKEYS.indexOf(volLevel());
-  if (gov.slow >= 2 && gov.n >= 3 && gov.t >= gov.hold && r > 0) {
+  if (gov.slow >= 2 && gov.n >= 3 && (gov.t >= gov.hold || r !== gov.hr) && r > 0) {
     volDrop++; gov.fps0 = gov.n / gov.s; gov.r0 = r;
   } else if (gov.fast >= 5 && volDrop > 0 && gov.t >= gov.ban[r + 1]) {
     volDrop--;
@@ -2231,11 +2237,12 @@ function loop(now) {
   tick(dt);
   // frame rate averaged over wall time (0.4 s), not over frames: it is as current at 1 fps as at 60, and each
   // frame weighs by its length, so alternating 16.7 and 33.3 ms frames read 40, the frames actually shown per s.
-  // A lone gap of 5 s or more, or the first frame after the tab was hidden, is a pause, not a frame (gap 0); two
-  // such gaps in a row are this machine's frame time, so a very slow GPU still counts (and the HUD keeps up).
+  // A gap of 5 s or more that is also at least 3 times the one before, or the first frame after the tab was hidden,
+  // is a pause, not a frame (gap 0); a long gap near the one before is this machine's frame time, so a very slow GPU
+  // still counts (and the HUD keeps up), also when its frames straddle 5 s.
   const raw = loop.prev ? now - loop.prev : 0;
-  const gap = raw && (raw < 5000 || loop.long) ? Math.max(raw, 1) / 1000 : 0;
-  loop.long = raw >= 5000;
+  const gap = raw && (raw < 5000 || raw < 3 * (loop.raw || 0)) ? Math.max(raw, 1) / 1000 : 0;
+  loop.raw = raw;
   loop.prev = now;
   if (gap) fpsEMA += (1 / gap - fpsEMA) * (1 - Math.exp(-gap / 0.4));
   governVolume(gap);
