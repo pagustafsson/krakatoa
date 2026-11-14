@@ -2,7 +2,7 @@
 
 Glowing, colourful smoke in real time that follows your pointer while you hold the mouse button down. There are two effects: **Lava**, millions of fine particles carried by a 2D fluid, and **Smoke**, a real 3D smoke simulation that is ray-marched every frame. Everything lives in a single HTML file written in plain WebGL2, with no libraries and no build step.
 
-Built by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
+Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
 
 ## Getting started
 
@@ -36,7 +36,7 @@ Each effect only simulates its own smoke, so the other one stays frozen until yo
 
 **First visit**:
 
-- The page opens in **Smoke** with the **Ash** palette, unless the link ends in `#lava`. Lava starts with **Aurora**.
+- The page opens in **Smoke** with the **Ash** palette, **Ultra** quality and a 4 % brush, unless the link ends in `#lava`. Lava starts with **Aurora** and **High** quality. On phones and tablets both effects start at **Medium**.
 - **Autopilot** paints smoke on its own until you click or touch the drawing area. Every click on the drawing area stops it, so you can paint your own smoke. Stopping it this way is not remembered, so it runs again on your next visit. Turning it off with the Autopilot switch or the **A** key is remembered.
 
 If the browser blocks storage, for example in a private window, everything still works, but settings are forgotten when the page reloads.
@@ -63,7 +63,7 @@ The panel has these groups:
 
 The Smoke field and Particle density sliders and the Smoke field and Particles switches only apply to Lava and are hidden in Smoke. In Smoke, **Lifetime** shows roughly how many seconds the smoke stays visible after it leaves the brush, from about 2 to 7.5 seconds.
 
-**Quality** sets the number of particles in Lava and the size of the 3D grid in Smoke. The default is High on computers and Medium on touch devices. The Smoke grid follows the shape of the window, and in Smoke the Quality menu shows the grid each level gives in the current window. In a 1920 × 1080 window:
+**Quality** sets the number of particles in Lava and the size of the 3D grid in Smoke. The defaults are Ultra for Smoke and High for Lava on computers, and Medium on touch devices. The Smoke grid follows the shape of the window, and in Smoke the Quality menu shows the grid each level gives in the current window. In a 1920 × 1080 window:
 
 | Quality | Lava particles | Smoke grid |
 | --- | --- | --- |

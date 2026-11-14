@@ -245,7 +245,7 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
 
 <script>
 // Krakatoa: real-time lava and smoke in WebGL2.
-// Built by @pagustafsson (https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
+// Created by @pagustafsson (https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
 (() => {
 'use strict';
 const $ = (id) => document.getElementById(id);
@@ -301,8 +301,8 @@ const LAVA_DEFAULTS = {
   showSmoke: true, showParticles: true, cursorLight: true,
 };
 const SMOKE_DEFAULTS = {
-  palette: 'Ash', quality: coarse ? 'medium' : 'high',
-  brush: 0.03, emission: 1.0, force: 1.0,
+  palette: 'Ash', quality: coarse ? 'medium' : 'ultra',
+  brush: 0.04, emission: 1.0, force: 1.0,
   swirl: 26, turbulence: 1.0, life: 1.0,
   smoke: 0.55, particles: 1.0, light: 1.0, shadows: 1.0, bloom: 0.9,
   coolTime: 0.5, lift: 1.0,
