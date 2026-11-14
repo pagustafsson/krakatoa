@@ -388,6 +388,7 @@ gl.getExtension('OES_texture_float_linear');
 
 // --- Settings ---
 const coarse = matchMedia('(pointer: coarse)').matches;
+if (coarse) { $('hint').textContent = 'Touch and drag'; canvas.setAttribute('aria-label', 'Drawing area. Touch and drag.'); }
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
