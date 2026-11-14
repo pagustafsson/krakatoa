@@ -58,7 +58,47 @@ body {
   padding: 14px 14px 12px; display: flex; flex-direction: column; gap: 14px;
   scrollbar-width: thin; scrollbar-color: var(--track) transparent;
 }
-.brand { display: flex; flex-direction: column; gap: 3px; }
+.brand { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.brand-text { display: flex; flex-direction: column; gap: 3px; }
+.ghost {
+  width: 28px; height: 28px; flex: none; padding: 0; border: 0; border-radius: 8px; cursor: pointer;
+  display: grid; place-items: center; background: transparent; color: var(--ink-faint); transition: color .15s, background .15s;
+}
+.ghost:hover { color: var(--ink); background: rgba(255,255,255,0.06); }
+.ghost:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 1px; color: var(--ink); }
+.brand .ghost { margin: -6px -6px 0 0; }
+
+.about {
+  width: min(680px, calc(100vw - 32px)); max-height: min(86vh, 900px); max-height: min(86dvh, 900px);
+  padding: 0; border: 1px solid var(--glass-edge); border-radius: 16px; overflow: hidden;
+  background: rgba(9, 11, 19, 0.95); color: var(--ink); box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+.about[open] { display: flex; flex-direction: column; animation: about-in .18s ease-out; }
+.about::backdrop { background: rgba(3, 4, 9, 0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+@keyframes about-in { from { opacity: 0; transform: translateY(8px) scale(.985); } }
+.about-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 14px 12px 24px; border-bottom: 1px solid var(--glass-edge); }
+.about-head h2 { margin: 0; font: 300 17px/1.2 var(--font-display); letter-spacing: 0.14em; text-transform: uppercase; }
+.about-body {
+  min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 24px 22px;
+  font-size: 14px; line-height: 1.6; color: var(--ink-dim); scrollbar-width: thin; scrollbar-color: var(--track) transparent;
+}
+.about-body:focus { outline: none; }
+.about-body h3 { margin: 26px 0 8px; font: 600 15px/1.3 var(--font-ui); color: var(--ink); text-wrap: balance; }
+.about-body h4 { margin: 20px 0 6px; font: 500 11px/1.3 var(--font-ui); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-faint); }
+.about-body p, .about-body ul, .about-body ol, .about-body pre, .about-body .tbl { margin: 0 0 12px; max-width: 68ch; }
+.about-body ul, .about-body ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 6px; }
+.about-body strong { color: var(--ink); font-weight: 500; }
+.about-body a { color: var(--ink); text-decoration-color: var(--accent); text-underline-offset: 3px; }
+.about-body a:hover { text-decoration-thickness: 2px; }
+.about-body code { font: 12px var(--font-mono); background: rgba(255,255,255,0.06); border-radius: 4px; padding: 1px 5px; color: var(--ink); }
+.about-body pre { background: rgba(255,255,255,0.04); border: 1px solid var(--glass-edge); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+.about-body pre code { background: none; padding: 0; }
+.tbl { overflow-x: auto; }
+.about-body table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+.about-body th, .about-body td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--glass-edge); }
+.about-body th { font-weight: 500; color: var(--ink); }
+.about-foot { padding: 10px 24px 12px; border-top: 1px solid var(--glass-edge); font-size: 12px; color: var(--ink-faint); }
+.about-foot a { color: var(--ink-dim); text-underline-offset: 3px; }
 .wordmark { font: 300 17px/1 var(--font-display); letter-spacing: 0.32em; color: var(--ink); }
 .sub { color: var(--ink-faint); font-size: 11px; letter-spacing: 0.02em; }
 
@@ -180,9 +220,14 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
   .hint { bottom: calc(48px + env(safe-area-inset-bottom, 0px)); font-size: 12px; }
   .coffee { width: 34px; padding: 0; justify-content: center; }
   .coffee span { display: none; }
+  .about { width: calc(100vw - 16px); max-height: calc(100dvh - 16px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); border-radius: 14px; }
+  .about-head { padding: 12px 10px 10px 18px; }
+  .about-body { padding: 4px 18px 18px; }
+  .about-foot { padding: 10px 18px 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .hint, .swatch, .switch input, .switch input::after, .seg button, .hud a { transition: none; }
+  .hint, .swatch, .switch input, .switch input::after, .seg button, .hud a, .ghost { transition: none; }
+  .about[open] { animation: none; }
 }
 </style>
 </head>
@@ -209,8 +254,17 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
   </div>
   <aside class="panel" id="panel" aria-label="Settings">
     <header class="brand">
-      <div class="wordmark">KRAKATOA</div>
-      <div class="sub">Real-time smoke · WebGL2</div>
+      <div class="brand-text">
+        <div class="wordmark">KRAKATOA</div>
+        <div class="sub">Real-time smoke · WebGL2</div>
+      </div>
+      <button class="ghost" id="btnAbout" type="button" aria-haspopup="dialog" aria-controls="about" aria-label="About Krakatoa" title="About Krakatoa">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.3"/>
+          <path d="M8 7.3v3.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          <circle cx="8" cy="5" r=".9" fill="currentColor"/>
+        </svg>
+      </button>
     </header>
 
     <section class="group">
@@ -253,6 +307,60 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
 </div>
 
 <div class="hud" id="hud"><a href="https://x.com/pagustafsson" target="_blank" rel="noopener" aria-label="@pagustafsson on X"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>@pagustafsson</a><span>·</span><span><b id="hudFps">–</b> fps</span></div>
+<dialog class="about" id="about" aria-labelledby="aboutTitle">
+  <div class="about-head">
+    <h2 id="aboutTitle">Krakatoa Smoke</h2>
+    <button class="ghost" id="aboutClose" type="button" aria-label="Close" title="Close (Esc)">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+  <div class="about-body" id="aboutBody" tabindex="-1">
+<p>Glowing, colourful smoke in real time that follows your pointer while you hold the mouse button down. There are two effects: <strong>Lava</strong>, millions of fine particles carried by a 2D fluid, and <strong>Smoke</strong>, a real 3D smoke simulation that is ray-marched every frame. Everything lives in a single HTML file written in plain WebGL2, with no libraries and no build step.</p>
+<p>Created by <a href="https://x.com/pagustafsson" target="_blank" rel="noopener">@pagustafsson</a> with Claude Opus 5.5 by Anthropic.</p>
+<p>If you like the smoke, here is a way to show your appreciation: <a href="https://buymeacoffee.com/pagustafsson" target="_blank" rel="noopener">buy me a coffee</a> ☕</p>
+<h3>Getting started</h3>
+<ol><li>Open <code>index.html</code> in a current version of Chrome, Safari, Edge or Firefox.</li><li>Hold down the mouse button and drag. On phones and tablets, use your finger. Several fingers at once work too.</li></ol>
+<p>If your browser won't run the page straight from disk, start a local server in the project folder and go to <code>http://localhost:8000</code>:</p>
+<pre><code>python3 -m http.server 8000</code></pre>
+<h3>Effects</h3>
+<ul><li><strong>Lava</strong>: millions of fine particles that glow together, with strands and veils of smoke.</li><li><strong>Smoke</strong>: smoke in three dimensions. The gas at the brush is hot and glows. It rises on its own, cools, and turns into smoke that swirls, shades itself and is lit by the glow.</li></ul>
+<p>Switch effect with the <strong>Effect</strong> buttons at the top of the panel, or press <strong>M</strong>. Your choice is remembered for the next visit.</p>
+<p>To open a specific effect directly, add <code>#lava</code> or <code>#smoke</code> to the end of the address. The older links <code>#partiklar</code> and <code>#volym</code> still work.</p>
+<p>Each effect only simulates its own smoke, so the other one stays frozen until you switch back. <strong>Clear</strong> (C) empties both. The palette swatches show the colours of the effect you are in.</p>
+<h3>Settings</h3>
+<p><strong>Each effect has its own settings</strong>: every slider, the palette, the quality, and the switches Smoke field, Particles and Light follows pointer. When you switch effect, the panel shows the other effect's settings. Settings are saved in your browser and survive a reload.</p>
+<p><strong>Shared settings</strong>: the chosen effect, Autopilot and whether the panel is open are shared by both effects and saved when you change them. Pause is never saved.</p>
+<p><strong>Reset</strong>: the <strong>Reset Lava settings</strong> or <strong>Reset Smoke settings</strong> button at the bottom of the panel restores the defaults of the effect you are in. The other effect is not touched.</p>
+<p><strong>First visit</strong>:</p>
+<ul><li>The page opens in <strong>Smoke</strong> with the <strong>Ash</strong> palette, <strong>Ultra</strong> quality and a 4 % brush, unless the link ends in <code>#lava</code>. Lava starts with <strong>Aurora</strong> and <strong>High</strong> quality. On phones and tablets both effects start at <strong>Medium</strong>.</li><li><strong>Autopilot</strong> paints smoke on its own until you click or touch the drawing area. Every click on the drawing area stops it, so you can paint your own smoke. Stopping it this way is not remembered, so it runs again on your next visit. Turning it off with the Autopilot switch or the <strong>A</strong> key is remembered.</li></ul>
+<p>If the browser blocks storage, for example in a private window, everything still works, but settings are forgotten when the page reloads.</p>
+<h3>Controls</h3>
+<div class="tbl"><table><thead><tr><th>Key</th><th>Action</th></tr></thead><tbody><tr><td>Space</td><td>Pause and resume</td></tr><tr><td>C</td><td>Clear the smoke</td></tr><tr><td>H</td><td>Show or hide the settings panel</td></tr><tr><td>A</td><td>Turn Autopilot on or off</td></tr><tr><td>M</td><td>Switch between Lava and Smoke</td></tr><tr><td>1–5</td><td>Palette: Ash, Aurora, Nebula, Magma, Spectrum</td></tr></tbody></table></div>
+<p>The panel has these groups:</p>
+<ul><li><strong>Quality</strong>: see the table below.</li><li><strong>Brush</strong>: Size, Amount and Force.</li><li><strong>Flow</strong>: Swirl, Turbulence and Lifetime.</li><li><strong>Light and rendering</strong>: Smoke field, Particle density, Light, Shadows and Glow.</li><li><strong>Heat</strong> (Smoke only): <strong>Cooling</strong> sets how fast the hot gas cools. Short gives a small glowing flame, long lets the gas glow and rise further. <strong>Lift</strong> sets how strongly hot gas rises, from 0 to 3 times normal.</li><li><strong>Layers</strong>: Smoke field, Particles, Light follows pointer and Autopilot.</li></ul>
+<p>The Smoke field and Particle density sliders and the Smoke field and Particles switches only apply to Lava and are hidden in Smoke. In Smoke, <strong>Lifetime</strong> shows roughly how many seconds the smoke stays visible after it leaves the brush, from about 2 to 7.5 seconds.</p>
+<p><strong>Quality</strong> sets the number of particles in Lava and the size of the 3D grid in Smoke. The defaults are Ultra for Smoke and High for Lava on computers, and Medium on touch devices. The Smoke grid follows the shape of the window, and in Smoke the Quality menu shows the grid each level gives in the current window. In a 1920 × 1080 window:</p>
+<div class="tbl"><table><thead><tr><th>Quality</th><th>Lava particles</th><th>Smoke grid</th></tr></thead><tbody><tr><td>Low</td><td>262,144</td><td>100 × 56 × 36</td></tr><tr><td>Medium</td><td>1,048,576</td><td>136 × 76 × 52</td></tr><tr><td>High</td><td>2,097,152</td><td>200 × 112 × 76</td></tr><tr><td>Ultra</td><td>4,194,304</td><td>228 × 128 × 84</td></tr></tbody></table></div>
+<p>The <strong>i</strong> button at the top of the settings panel opens this guide. The bottom-left corner shows a link to the creator on X and the current frame rate.</p>
+<h3>How it works</h3>
+<h4>Lava</h4>
+<ol><li><strong>Fluid.</strong> A 2D fluid solver on the GPU in the style of Stam's <em>Stable Fluids</em>, with vorticity confinement (Swirl) and curl-noise turbulence. Brush strokes are added as soft Gaussian strokes along the pointer's path, so fast strokes leave no gaps.</li><li><strong>Particles.</strong> Particle positions are stored in a floating-point texture and moved by the fluid's velocity, plus finer curl noise for thin strands. New particles are born from a ring buffer along the stroke.</li><li><strong>Colour.</strong> Smoke is born in a hot colour that shifts while you draw, then cools toward the palette's cool colour.</li><li><strong>Light.</strong> A light at the pointer casts shadows through the smoke by marching toward it across the screen. The smoke's density gives it shaded, rounded surfaces, and a faint key light from above lights the rest.</li></ol>
+<h4>Smoke</h4>
+<ol><li><strong>A 3D grid.</strong> The smoke lives in a box behind the screen, divided into 56 to 128 cells along the screen's short side depending on quality, and two thirds as many in depth. Each depth slice is a tile in one large 2D texture, so every solver step is a single draw call.</li><li><strong>Moving the smoke.</strong> Density, temperature and freshness (how new the smoke is) are carried along by the flow with the MacCormack method, which keeps sharper detail than the simpler semi-Lagrangian method. When no brush is active, the total amount of smoke is never allowed to grow. The sides of the box are open, so smoke that leaves it disappears.</li><li><strong>Forces.</strong> Hot gas rises (Lift), vorticity confinement keeps the curls alive where there is smoke (Swirl), and a soft, drifting turbulence field keeps it moving (Turbulence). The brush heats the gas, adds smoke and drags the gas in the direction you move.</li><li><strong>Pressure.</strong> Air can't be squeezed, so 16 to 30 Jacobi iterations per frame adjust the flow until as much air leaves each cell as enters it. This is what makes the smoke billow and roll over itself.</li><li><strong>Light.</strong> A half-resolution light volume works out how much light reaches each point, from a glow-coloured light at the pointer and from a key light above, with shadows through the smoke.</li><li><strong>Ray marching.</strong> A lower-resolution image sends one ray per pixel through the box. The smoke blocks light from behind, scatters the light from the light volume toward the camera, and glows where it is hot. The image is then smoothly scaled up to the screen.</li><li><strong>Detail finer than the grid.</strong> In large, cooled clouds, the smoke is displaced by noise that is carried along by the flow, so the fine detail stretches and swirls with the smoke. The noise restarts regularly before it stretches too far. The hot flame and fast jets get no noise.</li></ol>
+<p>Both effects finish the same way: an HDR image with glow, ACES filmic tone mapping, a vignette and dithering.</p>
+<h4>Automatic quality</h4>
+<p>When Smoke's frame rate stays too low, it switches to a coarser grid one step at a time, carries the smoke over, and the Quality heading shows "lowered to …". A step that doesn't raise the frame rate, for example because the browser caps the page at 30 frames per second, is undone, and when there is room again Smoke steps back up toward the quality you chose. Lava never changes quality on its own.</p>
+<h3>Requirements</h3>
+<ul><li>WebGL2 with the <code>EXT_color_buffer_float</code> extension. All modern desktop browsers have it, and so does Safari on iOS 15 and later.</li><li>Smoke also needs to render to floating-point 3D textures. If the graphics driver can't, the Smoke button is disabled and the page shows Lava.</li><li>The fonts come from Google Fonts. Without them, the page uses system fonts.</li></ul>
+<h3>Size</h3>
+<p>One file, <code>index.html</code>: about 121 KB, or about 38 KB gzipped.</p>
+<h3>Credits and references</h3>
+<ul><li>Jos Stam, <em>Stable Fluids</em> (SIGGRAPH 1999): semi-Lagrangian advection and pressure projection, the base of both solvers.</li><li>Ronald Fedkiw, Jos Stam and Henrik Wann Jensen, <em>Visual Simulation of Smoke</em> (SIGGRAPH 2001): vorticity confinement, used by Swirl in both effects.</li><li>Andrew Selle, Ronald Fedkiw, ByungMoon Kim, Yingjie Liu and Jarek Rossignac, <em>An Unconditionally Stable MacCormack Method</em> (Journal of Scientific Computing, 2008): the limited MacCormack advection in Smoke.</li><li>Mark Harris, <em>Fast Fluid Dynamics Simulation on the GPU</em> (GPU Gems, 2004), and Keenan Crane, Ignacio Llamas and Sarah Tariq, <em>Real-Time Simulation and Rendering of 3D Fluids</em> (GPU Gems 3, 2007): fluid solvers in fragment shaders, and 3D grids stored as flat 2D textures.</li><li>Robert Bridson, Jim Hourihan and Marcus Nordenstam, <em>Curl-Noise for Procedural Fluid Flow</em> (SIGGRAPH 2007): the turbulence and particle strands in Lava, and the detail noise in Smoke.</li><li>Theodore Kim, Nils Thürey, Doug James and Markus Gross, <em>Wavelet Turbulence for Fluid Simulation</em> (SIGGRAPH 2008): the idea behind Smoke's detail finer than the grid, noise carried by the flow and renewed before it stretches too far. Krakatoa uses curl noise instead of wavelet noise.</li><li>Pavel Dobryakov, <a href="https://github.com/PavelDoGreat/WebGL-Fluid-Simulation" target="_blank" rel="noopener">WebGL Fluid Simulation</a> (MIT license): the Lava solver follows its structure.</li><li>Inigo Quilez: gradient noise with analytic derivatives, the base of the curl noise in Lava.</li><li>Krzysztof Narkowicz, <em>ACES Filmic Tone Mapping Curve</em> (2016): the tone-mapping fit used by both effects.</li><li>The Krakatoa particle renderer by Thinkbox Software: the visual inspiration, and the name.</li></ul>
+<h3>License</h3>
+<p>MIT, see <a href="https://github.com/pagustafsson/krakatoa/blob/main/LICENSE" target="_blank" rel="noopener">LICENSE</a>. Keep the copyright notice when you use or share the code. A mention of <a href="https://x.com/pagustafsson" target="_blank" rel="noopener">@pagustafsson</a> and the name Krakatoa is appreciated.</p>
+  </div>
+  <div class="about-foot"><a href="https://github.com/pagustafsson/krakatoa" target="_blank" rel="noopener">Source code on GitHub</a> · MIT license</div>
+</dialog>
 <div class="hint" id="hint">Hold down the mouse button and drag</div>
 <div class="fail" id="fail" hidden><div><h1>Krakatoa couldn't start</h1><p></p></div></div>
 
@@ -2079,6 +2187,8 @@ function tick(dt) {
 }
 function loop(now) {
   requestAnimationFrame(loop);
+  // the About dialog covers the canvas: hold the last frame, and treat the time it was open as a pause
+  if (about.open) { last = now; loop.prev = 0; return; }
   const el = (now - last) / 1000;
   const dt = Math.min(Math.max(el, 0.001), 1 / 30);
   last = now;
@@ -2112,6 +2222,20 @@ canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('T
 
 // --- UI ---
 const panel = $('panel'), toggleBtn = $('panelToggle');
+const about = $('about'), aboutBtn = $('btnAbout'), aboutBody = $('aboutBody');
+aboutBtn.addEventListener('click', () => {
+  if (about.open) return;
+  aboutBtn.focus({ preventScroll: true }); // the dialog returns focus here when it closes
+  about.showModal();
+  aboutBody.scrollTop = 0;
+  aboutBody.focus({ preventScroll: true });
+});
+$('aboutClose').addEventListener('click', () => about.close());
+// close on a click on the backdrop, but not when a text selection ends outside the dialog
+let aboutDownOutside = false;
+about.addEventListener('pointerdown', (e) => { aboutDownOutside = e.target === about; });
+about.addEventListener('click', (e) => { if (aboutDownOutside && e.target === about) about.close(); });
+about.addEventListener('close', () => requestAnimationFrame(() => { if (!about.open && !panel.hidden) aboutBtn.focus({ preventScroll: true }); }));
 const uiStored = uiLoad();
 if (typeof uiStored.auto === 'boolean') P.auto = uiStored.auto;
 function setPanel(open, byHand) {
@@ -2271,7 +2395,7 @@ pauseBtn.addEventListener('click', togglePause);
 $('btnClear').addEventListener('click', clearAll);
 
 window.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || e.repeat || about.open) return;
   const ctl = e.target.closest && e.target.closest('input, select, textarea, button');
   if (ctl && (e.code === 'Space' || e.key === 'Enter' || !/^[mhca1-5]$/i.test(e.key))) return;
   if (ctl && ctl.tagName === 'SELECT') e.preventDefault(); // stop type-ahead, e.g. M selecting "Medium"

@@ -2,7 +2,9 @@
 
 Glowing, colourful smoke in real time that follows your pointer while you hold the mouse button down. There are two effects: **Lava**, millions of fine particles carried by a 2D fluid, and **Smoke**, a real 3D smoke simulation that is ray-marched every frame. Everything lives in a single HTML file written in plain WebGL2, with no libraries and no build step.
 
-Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic. If you enjoy it, you can [buy me a coffee](https://buymeacoffee.com/pagustafsson) ☕
+Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
+
+If you like the smoke, here is a way to show your appreciation: [buy me a coffee](https://buymeacoffee.com/pagustafsson) ☕
 
 ## Getting started
 
@@ -72,7 +74,7 @@ The Smoke field and Particle density sliders and the Smoke field and Particles s
 | High | 2,097,152 | 200 × 112 × 76 |
 | Ultra | 4,194,304 | 228 × 128 × 84 |
 
-The bottom-left corner shows a link to the creator on X and the current frame rate.
+The **i** button at the top of the settings panel opens this guide. The bottom-left corner shows a link to the creator on X and the current frame rate.
 
 ## How it works
 
@@ -107,7 +109,7 @@ When Smoke's frame rate stays too low, it switches to a coarser grid one step at
 
 ## Size
 
-One file, `index.html`: about 103 KB, or about 32 KB gzipped.
+One file, `index.html`: about 121 KB, or about 38 KB gzipped.
 
 ## Credits and references
 
