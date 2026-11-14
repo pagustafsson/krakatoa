@@ -2,6 +2,8 @@
 
 Glowing, colourful smoke in real time that follows your pointer while you hold the mouse button down. There are two effects: **Lava**, millions of fine particles carried by a 2D fluid, and **Smoke**, a real 3D smoke simulation that is ray-marched every frame. Everything lives in a single HTML file written in plain WebGL2, with no libraries and no build step.
 
+**[Try it live](https://pagustafsson.github.io/krakatoa/)**: [Smoke](https://pagustafsson.github.io/krakatoa/#smoke) · [Lava](https://pagustafsson.github.io/krakatoa/#lava)
+
 Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
 
 If you like Krakatoa, here is a way to show your appreciation: [buy me a coffee](https://buymeacoffee.com/pagustafsson) ☕
