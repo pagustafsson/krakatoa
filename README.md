@@ -115,7 +115,7 @@ One file, `index.html`: about 102 KB, or about 31 KB gzipped.
 - Ronald Fedkiw, Jos Stam and Henrik Wann Jensen, *Visual Simulation of Smoke* (SIGGRAPH 2001): vorticity confinement, used by Swirl in both effects.
 - Andrew Selle, Ronald Fedkiw, ByungMoon Kim, Yingjie Liu and Jarek Rossignac, *An Unconditionally Stable MacCormack Method* (Journal of Scientific Computing, 2008): the limited MacCormack advection in Smoke.
 - Mark Harris, *Fast Fluid Dynamics Simulation on the GPU* (GPU Gems, 2004), and Keenan Crane, Ignacio Llamas and Sarah Tariq, *Real-Time Simulation and Rendering of 3D Fluids* (GPU Gems 3, 2007): fluid solvers in fragment shaders, and 3D grids stored as flat 2D textures.
-- Robert Bridson, Jim Houriham and Marcus Nordenstam, *Curl-Noise for Procedural Fluid Flow* (SIGGRAPH 2007): the turbulence and particle strands in Lava, and the detail noise in Smoke.
+- Robert Bridson, Jim Hourihan and Marcus Nordenstam, *Curl-Noise for Procedural Fluid Flow* (SIGGRAPH 2007): the turbulence and particle strands in Lava, and the detail noise in Smoke.
 - Theodore Kim, Nils Thürey, Doug James and Markus Gross, *Wavelet Turbulence for Fluid Simulation* (SIGGRAPH 2008): the idea behind Smoke's detail finer than the grid, noise carried by the flow and renewed before it stretches too far. Krakatoa uses curl noise instead of wavelet noise.
 - Pavel Dobryakov, [WebGL Fluid Simulation](https://github.com/PavelDoGreat/WebGL-Fluid-Simulation) (MIT license): the Lava solver follows its structure.
 - Inigo Quilez: gradient noise with analytic derivatives, the base of the curl noise in Lava.
