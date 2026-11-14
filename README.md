@@ -4,7 +4,7 @@ Glowing, colourful smoke in real time that follows your pointer while you hold t
 
 Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
 
-If you like the smoke, here is a way to show your appreciation: [buy me a coffee](https://buymeacoffee.com/pagustafsson) ☕
+If you like Krakatoa, here is a way to show your appreciation: [buy me a coffee](https://buymeacoffee.com/pagustafsson) ☕
 
 ## Getting started
 
