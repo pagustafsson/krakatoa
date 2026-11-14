@@ -1,88 +1,123 @@
 # Krakatoa Smoke
 
-Färgad rök i realtid som följer pekaren när du håller nere musknappen. Det finns två effekter: **Lava**, med miljontals fina partiklar, och **Smoke**, en riktig 3D-simulering av rök. Inspirerad av partikelrenderaren Krakatoa. Allt ligger i en enda HTML-fil i ren WebGL2, utan bibliotek eller byggsteg. Gränssnittet är på engelska.
+Glowing, colourful smoke in real time that follows your pointer while you hold the mouse button down. There are two effects: **Lava**, millions of fine particles carried by a 2D fluid, and **Smoke**, a real 3D smoke simulation that is ray-marched every frame. Everything lives in a single HTML file written in plain WebGL2, with no libraries and no build step.
 
-## Kom igång
+Built by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
 
-Öppna `index.html` i en aktuell version av Chrome, Safari, Edge eller Firefox. Håll nere musknappen och dra. På mobil och surfplatta fungerar det med fingret, även med flera fingrar samtidigt.
+## Getting started
 
-Om webbläsaren vägrar köra sidan direkt från disken kan du starta en lokal server:
+1. Open `index.html` in a current version of Chrome, Safari, Edge or Firefox.
+2. Hold down the mouse button and drag. On phones and tablets, use your finger. Several fingers at once work too.
+
+If your browser won't run the page straight from disk, start a local server in the project folder and go to `http://localhost:8000`:
 
 ```bash
 python3 -m http.server 8000
 ```
 
-Gå sedan till `http://localhost:8000`.
+## Effects
 
-## Effekter
+- **Lava**: millions of fine particles that glow together, with strands and veils of smoke.
+- **Smoke**: smoke in three dimensions. The gas at the brush is hot and glows. It rises on its own, cools, and turns into smoke that swirls, shades itself and is lit by the glow.
 
-- **Lava**: miljontals fina partiklar som lyser ihop, med strängar och slöjor av rök.
-- **Smoke**: rök i tre dimensioner. Gasen vid penseln är het och glöder, stiger av sig själv, svalnar och blir till rök som virvlar, skuggar sig själv och lyses upp av glöden. Med paletten Aurora glöder den gulgrönt och blir sedan upplyst blå.
+Switch effect with the **Effect** buttons at the top of the panel, or press **M**. Your choice is remembered for the next visit.
 
-Byt effekt med knapparna under Effect överst i panelen eller med M. Första gången startar sidan i Lava, sedan sparas vald effekt till nästa besök. Lägg till `#lava` eller `#smoke` sist i adressen för att öppna en viss effekt direkt. De äldre länkarna `#partiklar` och `#volym` fungerar fortfarande. Varje effekt simulerar bara sin egen rök, så den andra står kvar tills du byter tillbaka. Clear (C) tömmer dock båda effekterna, och byter du kvalitet i Lava föds partiklarna på nytt, medan röken där står kvar. Palettrutorna visar färgerna i den effekt du är i.
+To open a specific effect directly, add `#lava` or `#smoke` to the end of the address. The older links `#partiklar` and `#volym` still work.
 
-## Inställningar per effekt
+Each effect only simulates its own smoke, so the other one stays frozen until you switch back. **Clear** (C) empties both. The palette swatches show the colours of the effect you are in.
 
-Lava och Smoke har var sin uppsättning inställningar: alla reglage, palett, kvalitet och brytarna Smoke field, Particles och Light follows pointer. När du byter effekt sparas den du lämnar och den andra effektens inställningar visas i panelen. Inställningarna sparas i webbläsaren och finns kvar när du laddar om sidan. Båda effekterna börjar med samma standardvärden.
+## Settings
 
-Vald effekt, Autopilot och om panelen är öppen eller stängd är gemensamt för båda effekterna och sparas när du ändrar dem. Paus sparas inte.
+**Each effect has its own settings**: every slider, the palette, the quality, and the switches Smoke field, Particles and Light follows pointer. When you switch effect, the panel shows the other effect's settings. Settings are saved in your browser and survive a reload.
 
-Knappen **Reset Lava settings** eller **Reset Smoke settings** längst ned i panelen återställer standardvärdena för den effekt du är i. Den andra effekten påverkas inte.
+**Shared settings**: the chosen effect, Autopilot and whether the panel is open are shared by both effects and saved when you change them. Pause is never saved.
 
-Blockerar webbläsaren lagringen, till exempel i ett privat fönster, fungerar allt ändå, men inställningarna glöms när sidan laddas om.
+**Reset**: the **Reset Lava settings** or **Reset Smoke settings** button at the bottom of the panel restores the defaults of the effect you are in. The other effect is not touched.
 
-## Styrning
+**First visit**:
 
-| Tangent | Funktion |
+- The page opens in **Smoke** with the **Ash** palette, unless the link ends in `#lava`. Lava starts with **Aurora**.
+- **Autopilot** paints smoke on its own until you click or touch the drawing area. Every click on the drawing area stops it, so you can paint your own smoke. Stopping it this way is not remembered, so it runs again on your next visit. Turning it off with the Autopilot switch or the **A** key is remembered.
+
+If the browser blocks storage, for example in a private window, everything still works, but settings are forgotten when the page reloads.
+
+## Controls
+
+| Key | Action |
 | --- | --- |
-| Space | Pause och Resume |
-| C | Clear: töm röken |
-| H | Visa och dölj panelen (Settings) |
-| A | Slå på och av Autopilot |
-| M | Byt mellan Lava och Smoke |
-| 1–5 | Byt palett: Aurora, Nebula, Magma, Spectrum, Ash |
+| Space | Pause and resume |
+| C | Clear the smoke |
+| H | Show or hide the settings panel |
+| A | Turn Autopilot on or off |
+| M | Switch between Lava and Smoke |
+| 1–5 | Palette: Ash, Aurora, Nebula, Magma, Spectrum |
 
-I panelen finns Quality, Brush (Size, Amount, Force), Flow (Swirl, Turbulence, Lifetime), Light and rendering (Smoke field, Particle density, Light, Shadows, Glow) och Layers. Quality bestämmer antalet partiklar i Lava och storleken på 3D-gridet i Smoke. Gridet följer fönstrets form. I Smoke visar menyn vilket grid varje kvalitet ger i fönstret som det ser ut just nu, och listan uppdateras när du ändrar fönstrets storlek. Så här blir det i ett fönster på 1920 × 1080:
+The panel has these groups:
 
-| Quality | Lava | Smoke |
+- **Quality**: see the table below.
+- **Brush**: Size, Amount and Force.
+- **Flow**: Swirl, Turbulence and Lifetime.
+- **Light and rendering**: Smoke field, Particle density, Light, Shadows and Glow.
+- **Heat** (Smoke only): **Cooling** sets how fast the hot gas cools. Short gives a small glowing flame, long lets the gas glow and rise further. **Lift** sets how strongly hot gas rises, from 0 to 3 times normal.
+- **Layers**: Smoke field, Particles, Light follows pointer and Autopilot.
+
+The Smoke field and Particle density sliders and the Smoke field and Particles switches only apply to Lava and are hidden in Smoke. In Smoke, **Lifetime** shows roughly how many seconds the smoke stays visible after it leaves the brush, from about 2 to 7.5 seconds.
+
+**Quality** sets the number of particles in Lava and the size of the 3D grid in Smoke. The default is High on computers and Medium on touch devices. The Smoke grid follows the shape of the window, and in Smoke the Quality menu shows the grid each level gives in the current window. In a 1920 × 1080 window:
+
+| Quality | Lava particles | Smoke grid |
 | --- | --- | --- |
-| Low | 262 000 partiklar | 100 × 56 × 36 |
-| Medium | 1 miljon partiklar | 136 × 76 × 52 |
-| High | 2,1 miljoner partiklar | 200 × 112 × 76 |
-| Ultra | 4,2 miljoner partiklar | 228 × 128 × 84 |
+| Low | 262,144 | 100 × 56 × 36 |
+| Medium | 1,048,576 | 136 × 76 × 52 |
+| High | 2,097,152 | 200 × 112 × 76 |
+| Ultra | 4,194,304 | 228 × 128 × 84 |
 
-Smoke har två egna reglage under Heat, och Lifetime betyder något annat där:
+The bottom-left corner shows a link to the creator on X and the current frame rate.
 
-- **Cooling** styr hur snabbt den heta gasen svalnar. Ett kort värde ger en liten glödande låga. Ett långt värde låter gasen glöda och stiga längre.
-- **Lift** styr hur starkt het gas stiger, från 0 till 3 gånger det normala. På 0 stiger röken inte av sig själv.
-- **Lifetime** styr hur länge röken finns kvar och hur snabbt den går över i palettens äldsta färg. Värdet visar ungefär hur många sekunder röken syns efter att den lämnat penseln, från cirka 2 till 7,5 sekunder. Det planar ut eftersom gammal rök tunnas ut och stiger ut ur bilden. På lägre kvalitet försvinner röken lite tidigare.
-
-Reglagen Smoke field och Particle density och brytarna Smoke field och Particles under Layers gäller bara Lava och döljs i Smoke.
-
-## Så fungerar det
+## How it works
 
 ### Lava
 
-1. **Vätskesimulering.** En Navier–Stokes-lösare på grafikkortet, i stil med Stams *Stable Fluids*. Den har virvelförstärkning och turbulens från curl-brus. Penseldrag läggs in som utsmetade Gauss-fläckar längs pekarens väg, så att snabba drag inte lämnar luckor.
-2. **Partiklar.** Positionerna lagras i en flyttalstextur och flyttas av hastighetsfältet. Ovanpå det läggs finare curl-brus för tunna strängar. Nya partiklar föds ur en ringbuffert längs penseldraget.
-3. **Färg.** Röken föds i en varm färg som skiftar medan du ritar och svalnar sedan mot palettens kalla färg.
-4. **Ljus.** En ljuskälla vid pekaren kastar skuggor genom röken med en strålmarsch i skärmrymden. Rökens täthet ger ytor med form, och ett svagt toppljus lyser upp resten.
+1. **Fluid.** A 2D fluid solver on the GPU in the style of Stam's *Stable Fluids*, with vorticity confinement (Swirl) and curl-noise turbulence. Brush strokes are added as soft Gaussian strokes along the pointer's path, so fast strokes leave no gaps.
+2. **Particles.** Particle positions are stored in a floating-point texture and moved by the fluid's velocity, plus finer curl noise for thin strands. New particles are born from a ring buffer along the stroke.
+3. **Colour.** Smoke is born in a hot colour that shifts while you draw, then cools toward the palette's cool colour.
+4. **Light.** A light at the pointer casts shadows through the smoke by marching toward it across the screen. The smoke's density gives it shaded, rounded surfaces, and a faint key light from above lights the rest.
 
 ### Smoke
 
-1. **3D-grid.** Röken simuleras i en låda bakom skärmen, uppdelad i kubiska celler: 56 till 128 celler på skärmens kortsida beroende på kvalitet, och två tredjedelar så många på djupet. Varje skiva i djupled ligger som en ruta i en stor 2D-textur, så att varje delsteg i lösaren blir ett enda ritanrop. När fönstret ändrar storlek så att gridet måste bytas står röken still tills storleken har stannat, och flyttas sedan över till ett grid som passar det nya fönstret. Röken behåller då sin storlek på skärmen och hamnar i mitten, så att den inte dras ut åt sidorna när ett fönster som har varit smalt blir stort igen, vare sig det sker i ett enda steg eller i flera. Bara när skärmen vrids, så att bredd och höjd ungefär byter plats, formas röken om så att den fyller den vridna skärmen. Blir fönstrets kortsida smalare än 32 pixlar står röken still tills fönstret blir större igen.
-2. **Transport.** Täthet, temperatur och färskhet (hur ny röken är) flyttas med strömningen enligt MacCormack-metoden, som behåller skarpare detaljer än en vanlig semi-Lagrange-lösare. Där korrigeringen skjuter över grannvärdena används det vanliga värdet i stället, och där den skjuter under dem används det minsta grannvärdet. Det lyfter ändå tätheten en aning i varje steg, så när ingen pensel är aktiv summeras röken på grafikkortet i varje bildruta och skalas så att den totala mängden aldrig blir större än i bildrutan innan. Röken växer alltså inte av sig själv när du har släppt musknappen. Lådans sidor är öppna, så rök som lämnar den försvinner och ren luft strömmar in.
-3. **Krafter.** Het gas stiger (Lift). Virvelförstärkningen (Swirl) verkar bara där det finns rök, och ett mjukt turbulensfält (Turbulence) håller röken i rörelse. Penseln är en mjuk sfär i lådans mittplan som värmer gasen, fyller på rök och drar gasen med sig åt det håll du drar.
-4. **Tryck.** Luft går inte att pressa ihop. En tryckberäkning med 16 till 30 Jacobi-iterationer per bildruta, beroende på kvalitet, justerar hastigheterna så att lika mycket luft strömmar ut ur varje cell som in i den. Det är den som får röken att välla fram och rulla runt sig själv.
-5. **Ljus.** Varje bildruta kopieras tätheten till en 3D-textur. En ljusvolym i halva upplösningen räknar ut hur mycket ljus som når varje punkt från ett ljus i glödens färg vid pekaren och från ett toppljus snett ovanifrån, med skuggor genom röken.
-6. **Strålföljning.** En bild i lägre upplösning än skärmen skickar en stråle per pixel genom lådan, en cell i taget. Röken dämpar ljuset bakom sig, sprider ljuset från ljusvolymen mot kameran och glöder där den är het. Bilden skalas sedan mjukt upp till skärmen.
-7. **Detaljer finare än gridet.** I stora, svalnade rökmoln förskjuts tätheten med ett brus som följer strömningen, så att detaljerna töjs ut och virvlar med röken. Bruset finns i två omgångar som startar om var 1,2 sekund, förskjutna en halv period, och tonas över i varandra så att det aldrig hinner töjas ut för mycket. Den heta lågan och snabba strålar får inget brus.
-8. **Automatisk kvalitet.** Om bildfrekvensen ligger under 50 bilder per sekund i två sekunder byter Smoke till ett grövre grid, högst ett steg var tredje sekund och aldrig under Low. Röken flyttas över till det nya gridet. Rubriken Quality visar då ”lowered to …” och raden längst ned till vänster visar det grid som körs. Tre sekunder efter ett steg, och tidigast när tre bildrutor har ritats med det nya gridet, kontrolleras att bildfrekvensen har ökat med minst 10 procent jämfört med de två sista sekunderna före steget. Gör den inte det var det inte gridet som begränsade, till exempel när webbläsaren låser sidan till 30 bilder per sekund för att spara ström. Då tas steget tillbaka och Smoke sänker inte igen från den nivån på 30 sekunder. Händer det flera gånger i rad från samma nivå fördubblas tiden varje gång, upp till 4 minuter. Det gäller bara den nivån: går Smoke upp till en högre nivå som visar sig vara för långsam sänker den därifrån som vanligt. Bildfrekvensen som det ångrade steget inte kunde höja blir ett tak. Så länge taket gäller är bildfrekvensen för låg först under 85 procent av taket och tillräckligt hög från 95 procent av det, så att till exempel 30 bilder per sekund räcker när sidan är låst till 30. Taket gäller lika länge som väntetiden. Sedan prövar Smoke att sänka igen, så att den märker att låsningen har släppt även när gridet självt bara hinner med 30 bilder per sekund. Taket släpper tidigare om bildfrekvensen har legat minst 15 procent över det i två sekunder, när fönstret ändrar storlek och när du väljer en kvalitet. Ligger bildfrekvensen på 58 eller mer, eller nära taket, i fem sekunder går Smoke upp ett steg igen, men efter en sänkning som hjälpte väntar den först 20 sekunder innan den går tillbaka till nivån den lämnade. Tiden fördubblas för varje ny sänkning från samma nivå, upp till 4 minuter, så att kvaliteten inte pendlar fram och tillbaka. Byter du kvalitet i menyn börjar Smoke om från den nivån, och både det och en ny fönsterstorlek nollställer väntetiderna. Lava påverkas inte.
+1. **A 3D grid.** The smoke lives in a box behind the screen, divided into 56 to 128 cells along the screen's short side depending on quality, and two thirds as many in depth. Each depth slice is a tile in one large 2D texture, so every solver step is a single draw call.
+2. **Moving the smoke.** Density, temperature and freshness (how new the smoke is) are carried along by the flow with the MacCormack method, which keeps sharper detail than the simpler semi-Lagrangian method. When no brush is active, the total amount of smoke is never allowed to grow. The sides of the box are open, so smoke that leaves it disappears.
+3. **Forces.** Hot gas rises (Lift), vorticity confinement keeps the curls alive where there is smoke (Swirl), and a soft, drifting turbulence field keeps it moving (Turbulence). The brush heats the gas, adds smoke and drags the gas in the direction you move.
+4. **Pressure.** Air can't be squeezed, so 16 to 30 Jacobi iterations per frame adjust the flow until as much air leaves each cell as enters it. This is what makes the smoke billow and roll over itself.
+5. **Light.** A half-resolution light volume works out how much light reaches each point, from a glow-coloured light at the pointer and from a key light above, with shadows through the smoke.
+6. **Ray marching.** A lower-resolution image sends one ray per pixel through the box. The smoke blocks light from behind, scatters the light from the light volume toward the camera, and glows where it is hot. The image is then smoothly scaled up to the screen.
+7. **Detail finer than the grid.** In large, cooled clouds, the smoke is displaced by noise that is carried along by the flow, so the fine detail stretches and swirls with the smoke. The noise restarts regularly before it stretches too far. The hot flame and fast jets get no noise.
 
-Båda effekterna avslutas likadant: HDR-bild med glöd, ACES-tonmappning, vinjett och dithering.
+Both effects finish the same way: an HDR image with glow, ACES filmic tone mapping, a vignette and dithering.
 
-## Krav
+### Automatic quality
 
-WebGL2 med tillägget `EXT_color_buffer_float`. Det finns i alla moderna skrivbordswebbläsare och i Safari på iOS 15 och senare.
+When Smoke's frame rate stays too low, it switches to a coarser grid one step at a time, carries the smoke over, and the Quality heading shows "lowered to …". A step that doesn't raise the frame rate, for example because the browser caps the page at 30 frames per second, is undone, and when there is room again Smoke steps back up toward the quality you chose. Lava never changes quality on its own.
 
-Smoke behöver dessutom kunna rendera till 3D-texturer i flyttalsformat. Om grafikkortet inte klarar det är Smoke-knappen avstängd och sidan visar Lava.
+## Requirements
+
+- WebGL2 with the `EXT_color_buffer_float` extension. All modern desktop browsers have it, and so does Safari on iOS 15 and later.
+- Smoke also needs to render to floating-point 3D textures. If the graphics driver can't, the Smoke button is disabled and the page shows Lava.
+- The fonts come from Google Fonts. Without them, the page uses system fonts.
+
+## Size
+
+One file, `index.html`: about 102 KB, or about 31 KB gzipped.
+
+## Credits and references
+
+- Jos Stam, *Stable Fluids* (SIGGRAPH 1999): semi-Lagrangian advection and pressure projection, the base of both solvers.
+- Ronald Fedkiw, Jos Stam and Henrik Wann Jensen, *Visual Simulation of Smoke* (SIGGRAPH 2001): vorticity confinement, used by Swirl in both effects.
+- Andrew Selle, Ronald Fedkiw, ByungMoon Kim, Yingjie Liu and Jarek Rossignac, *An Unconditionally Stable MacCormack Method* (Journal of Scientific Computing, 2008): the limited MacCormack advection in Smoke.
+- Mark Harris, *Fast Fluid Dynamics Simulation on the GPU* (GPU Gems, 2004), and Keenan Crane, Ignacio Llamas and Sarah Tariq, *Real-Time Simulation and Rendering of 3D Fluids* (GPU Gems 3, 2007): fluid solvers in fragment shaders, and 3D grids stored as flat 2D textures.
+- Robert Bridson, Jim Houriham and Marcus Nordenstam, *Curl-Noise for Procedural Fluid Flow* (SIGGRAPH 2007): the turbulence and particle strands in Lava, and the detail noise in Smoke.
+- Theodore Kim, Nils Thürey, Doug James and Markus Gross, *Wavelet Turbulence for Fluid Simulation* (SIGGRAPH 2008): the idea behind Smoke's detail finer than the grid, noise carried by the flow and renewed before it stretches too far. Krakatoa uses curl noise instead of wavelet noise.
+- Pavel Dobryakov, [WebGL Fluid Simulation](https://github.com/PavelDoGreat/WebGL-Fluid-Simulation) (MIT license): the Lava solver follows its structure.
+- Inigo Quilez: gradient noise with analytic derivatives, the base of the curl noise in Lava.
+- Krzysztof Narkowicz, *ACES Filmic Tone Mapping Curve* (2016): the tone-mapping fit used by both effects.
+- The Krakatoa particle renderer by Thinkbox Software: the visual inspiration, and the name.
