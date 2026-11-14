@@ -2,7 +2,7 @@
 
 Glowing, colourful smoke in real time that follows your pointer while you hold the mouse button down. There are two effects: **Lava**, millions of fine particles carried by a 2D fluid, and **Smoke**, a real 3D smoke simulation that is ray-marched every frame. Everything lives in a single HTML file written in plain WebGL2, with no libraries and no build step.
 
-Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
+Created by [@pagustafsson](https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic. If you enjoy it, you can [buy me a coffee](https://buymeacoffee.com/pagustafsson) ☕
 
 ## Getting started
 
@@ -107,7 +107,7 @@ When Smoke's frame rate stays too low, it switches to a coarser grid one step at
 
 ## Size
 
-One file, `index.html`: about 102 KB, or about 31 KB gzipped.
+One file, `index.html`: about 103 KB, or about 32 KB gzipped.
 
 ## Credits and references
 
@@ -121,3 +121,7 @@ One file, `index.html`: about 102 KB, or about 31 KB gzipped.
 - Inigo Quilez: gradient noise with analytic derivatives, the base of the curl noise in Lava.
 - Krzysztof Narkowicz, *ACES Filmic Tone Mapping Curve* (2016): the tone-mapping fit used by both effects.
 - The Krakatoa particle renderer by Thinkbox Software: the visual inspiration, and the name.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Keep the copyright notice when you use or share the code. A mention of [@pagustafsson](https://x.com/pagustafsson) and the name Krakatoa is appreciated.
