@@ -8,7 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Unbounded:wght@300;400&display=swap">
 <style>
-/* Layout: full-bleed WebGL smoke canvas; a slim glass control rail docked top-right; render HUD bottom-left. One dark look by design. */
 :root {
   color-scheme: dark;
   --void: #030409;
@@ -236,6 +235,8 @@ kbd { font: 400 10px var(--font-mono); color: var(--ink-faint); }
 <div class="fail" id="fail" hidden><div><h1>Krakatoa couldn't start</h1><p></p></div></div>
 
 <script>
+// Krakatoa: real-time lava and smoke in WebGL2.
+// Built by @pagustafsson (https://x.com/pagustafsson) with Claude Opus 5.5 by Anthropic.
 (() => {
 'use strict';
 const $ = (id) => document.getElementById(id);
@@ -253,16 +254,12 @@ if (!gl.getExtension('EXT_color_buffer_float')) {
 }
 gl.getExtension('OES_texture_float_linear');
 
-/* ------------------------------------------------------------------ */
-/* Settings                                                           */
-/* ------------------------------------------------------------------ */
+// --- Settings ---
 const coarse = matchMedia('(pointer: coarse)').matches;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
 
-// sim: velocity grid (short side), dye: smoke field (short side), pw×ph: particle state texture, accum: particle buffer vs CSS px
-// Volume mode only: g: 3D grid cells on the short screen side, gz: grid depth vs g, jac: pressure (Jacobi) iterations,
-// rm: ray-march buffer vs CSS px (at most V_RAYS rays per grid cell)
+// sim/dye/pw/ph/accum: Lava; g: Smoke cells on the short side, gz: depth ratio, jac: Jacobi iterations, rm: march scale
 const QUALITY = {
   low:    { label: 'Low',    sim: 96,  dye: 512,  pw: 512,  ph: 512,  accum: 0.6, g: 56,  gz: 0.67, jac: 16, rm: 0.5 },
   medium: { label: 'Medium', sim: 128, dye: 1024, pw: 1024, ph: 1024, accum: 0.8, g: 76,  gz: 0.67, jac: 20, rm: 0.6 },
@@ -270,8 +267,6 @@ const QUALITY = {
   ultra:  { label: 'Ultra',  sim: 224, dye: 1440, pw: 2048, ph: 2048, accum: 1.0, g: 128, gz: 0.67, jac: 30, rm: 0.9 },
 };
 
-// hot = colour at emission (cycles while you draw), cool = colour the smoke ages into
-// Volume mode only: ember = glow of cooling smoke, smoke = albedo of cooled smoke, tail = albedo of the oldest smoke
 const PALETTES = [
   { name: 'Aurora',   hot: ['#d6ff3c', '#4dffa0', '#24e4ff', '#9cff4a'], cool: '#1a3bff', key: '#2c4cff', bg: ['#010207', '#041026'], ember: '#7aff30', smoke: '#2f5cff', tail: '#2a30e0' },
   { name: 'Nebula',   hot: ['#ff2fa2', '#ff4d6d', '#c43cff', '#ff6fd6'], cool: '#1c88ff', key: '#5a2cff', bg: ['#030107', '#14062e'], ember: '#b03cff', smoke: '#3a8cff', tail: '#3a28b8' },
@@ -280,12 +275,11 @@ const PALETTES = [
   { name: 'Ash',      hot: ['#ffffff', '#ffe8cf', '#e4eeff', '#fff4e4'], cool: '#566176', key: '#8090b4', bg: ['#030304', '#0f1117'], ember: '#ff7a2c', smoke: '#a4acbc', tail: '#464b58' },
 ];
 
-// The effects' names on screen. P.mode keeps the internal values (also in storage and the debug hook), so renaming an
-// effect is a change here only.
+// On-screen names; P.mode, storage and the debug hook keep the internal ones.
 const MODE_LABEL = { particles: 'Lava', volume: 'Smoke' };
 
 const P = {
-  mode: 'particles', // 'particles' (Lava) = fine additive particle smoke, 'volume' (Smoke) = ray-marched 3D smoke solver
+  mode: 'particles',
   coolTime: 0.5, lift: 1.0,
   quality: coarse ? 'medium' : 'high',
   palette: 0,
@@ -306,7 +300,6 @@ const SLIDERS = {
   'g-flow': [
     ['swirl', 'Swirl', 0, 60, 1, (v) => v.toFixed(0)],
     ['turbulence', 'Turbulence', 0, 3, 0.05, (v) => v.toFixed(2)],
-    // Lava: mean particle life; Smoke: how long smoke stays visible after it leaves the emitter (volLife)
     ['life', 'Lifetime', 0.3, 3, 0.05, (v) => (P.mode === 'volume' ? volLife(v) : 3.3 * v).toFixed(1) + ' s'],
   ],
   'g-render': [
@@ -321,18 +314,13 @@ const SLIDERS = {
     ['lift', 'Lift', 0, 3, 0.05, (v) => '×' + v.toFixed(2)],
   ],
 };
-const sliderSync = {}; // key → refresh its output (setMode: Lifetime reads differently per effect)
+const sliderSync = {};
 
-// Each effect keeps its own settings. These keys of P belong to the effect that runs; the other effect's are parked
-// in fx, and each effect's are saved to localStorage under its own key (krakatoa.settings.particles / .volume). The
-// rest of P is global: mode and auto (saved apart), paused (never saved). Both effects start from today's defaults.
 const FX_KEYS = ['brush', 'emission', 'force', 'swirl', 'turbulence', 'life', 'smoke', 'particles', 'light', 'shadows', 'bloom',
   'coolTime', 'lift', 'palette', 'quality', 'showSmoke', 'showParticles', 'cursorLight'];
 const FX_DEFAULTS = Object.fromEntries(FX_KEYS.map((k) => [k, P[k]]));
 const FX_STORE = 'krakatoa.settings.', FX_VERSION = 1;
 const fxPick = () => Object.fromEntries(FX_KEYS.map((k) => [k, P[k]]));
-// Stored settings → a complete, valid set: a value that is missing, of the wrong type or out of range falls back to
-// its default, a slider value snaps to its step, a quality this GPU cannot run falls back too
 function fxValid(o) {
   const s = { ...FX_DEFAULTS };
   if (!o || typeof o !== 'object') return s;
@@ -354,28 +342,24 @@ function fxLoad(mode) {
   try {
     const o = JSON.parse(localStorage.getItem(FX_STORE + mode));
     if (o && o.version === FX_VERSION) return fxValid(o.settings);
-  } catch (_) { /* storage is optional */ }
+  } catch (_) { }
   return { ...FX_DEFAULTS };
 }
 function fxSave(mode, settings) {
-  try { localStorage.setItem(FX_STORE + mode, JSON.stringify({ version: FX_VERSION, settings })); } catch (_) { /* storage is optional */ }
+  try { localStorage.setItem(FX_STORE + mode, JSON.stringify({ version: FX_VERSION, settings })); } catch (_) { }
 }
 const fx = { particles: fxLoad('particles'), volume: fxLoad('volume') };
-// A setting of either effect (the running one's is in P)
 const fxGet = (mode, k) => (mode === P.mode ? P[k] : fx[mode][k]);
-// The autopilot and panel switches as last set by hand (global, not per effect)
 const UI_STORE = 'krakatoa.ui';
 function uiLoad() {
-  try { const o = JSON.parse(localStorage.getItem(UI_STORE)); if (o && o.version === 1) return o; } catch (_) { /* storage is optional */ }
+  try { const o = JSON.parse(localStorage.getItem(UI_STORE)); if (o && o.version === 1) return o; } catch (_) { }
   return {};
 }
 function uiSave(patch) {
-  try { localStorage.setItem(UI_STORE, JSON.stringify({ ...uiLoad(), ...patch, version: 1 })); } catch (_) { /* storage is optional */ }
+  try { localStorage.setItem(UI_STORE, JSON.stringify({ ...uiLoad(), ...patch, version: 1 })); } catch (_) { }
 }
 
-/* ------------------------------------------------------------------ */
-/* Shaders                                                            */
-/* ------------------------------------------------------------------ */
+// --- Shaders ---
 const VS_QUAD = `#version 300 es
 precision highp float;
 layout(location = 0) in vec2 aPos;
@@ -396,7 +380,6 @@ in vec2 vUv; in vec2 vL; in vec2 vR; in vec2 vT; in vec2 vB;
 out vec4 o;
 `;
 
-// PCG hash, interleaved gradient noise, and 2D gradient noise with analytic derivatives (for curl noise)
 const COMMON = `
 uint pcg(uint v) { uint s = v * 747796405u + 2891336453u; uint w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 float rnd(inout uint s) { s = pcg(s); return float(s) * 2.3283064e-10; }
@@ -422,7 +405,6 @@ const FS = {
   copy: `uniform sampler2D uSrc; uniform float uMul;
 void main() { o = texture(uSrc, vUv) * uMul; }`,
 
-  // Stroke splat: Gaussian around up to 16 line segments (capsules), so fast strokes leave no gaps.
   splat: `uniform sampler2D uSrc;
 uniform int uN; uniform vec2 uA[16]; uniform vec2 uB[16]; uniform vec4 uV[16];
 uniform float uAspect, uRad2, uMaxA;
@@ -449,7 +431,6 @@ void main() {
   o = texture(uSrc, coord) / (1.0 + uDiss * uDt);
 }`,
 
-  // Dye advection that also "cools" the colour from the emission hue toward the palette's cool colour
   advectDye: `uniform sampler2D uVel, uSrc; uniform vec2 uVelTexel; uniform float uDt, uDiss, uCooling; uniform vec3 uCool;
 void main() {
   vec2 coord = vUv - uDt * texture(uVel, vUv).xy * uVelTexel;
@@ -487,7 +468,6 @@ void main() {
   o = vec4(clamp(v, -1000.0, 1000.0), 0.0, 1.0);
 }`,
 
-  // Low-frequency curl-noise turbulence, stronger where there is smoke, keeps the field alive
   forces: COMMON + `uniform sampler2D uVel, uDye; uniform float uDt, uTime, uTurb, uAspect;
 void main() {
   vec2 v = texture(uVel, vUv).xy;
@@ -514,8 +494,6 @@ void main() {
 
   pInit: `void main() { o = vec4(-10.0, -10.0, 1e6, 0.0); }`,
 
-  // One fragment = one particle. xy: position (uv), z: age (s), w: palette hue.
-  // A ring buffer [uHead, uHead+uCount) is respawned along this frame's stroke segments.
   pUpdate: COMMON + `uniform sampler2D uState, uVel;
 uniform vec2 uVelTexel;
 uniform float uDt, uTime, uAspect, uSigma, uHueSpread, uNoiseAmp, uNoiseFreq, uNoiseSpeed;
@@ -563,7 +541,6 @@ precision highp float;
 in vec4 vCol; out vec4 o;
 void main() { vec2 c = gl_PointCoord * 2.0 - 1.0; o = vCol * max(0.0, 1.0 - dot(c, c) * 0.5); }`,
 
-  // Combine smoke field + particle buffer into one density/colour field at lighting resolution
   density: `uniform sampler2D uDye, uAcc; uniform vec2 uAccTexel; uniform float uDyeGain, uPartGain;
 void main() {
   vec2 t = uAccTexel;
@@ -582,8 +559,6 @@ void main() {
   o = c;
 }`,
 
-  // Lighting: point light at the cursor with ray-marched self-shadowing through the smoke,
-  // plus a soft key light from above. Normals come from the density gradient (billows).
   light: COMMON + `uniform sampler2D uDens; uniform vec2 uTexel;
 uniform vec2 uLight; uniform float uLightZ, uFalloff, uAbsorb, uAspect, uNormal, uSelf, uFrameF;
 uniform vec3 uLightCol, uKeyCol;
@@ -698,16 +673,8 @@ void main() {
   gl_PointSize = uPointSize;
 }`;
 
-/* ------------------------------------------------------------------ */
-/* Volume mode shaders: 3D smoke solver + volumetric ray march         */
-/* ------------------------------------------------------------------ */
-// Kept apart from FS so a compile failure here only disables volume mode instead of the whole page.
-// Every 3D field lives in a "flat 3D texture": a 2D atlas whose tiles are the Z slices (uCols tiles per row),
-// so each solver pass is one fullscreen draw over the atlas. Neighbours are texelFetch'ed; semi-Lagrangian
-// lookups take two hardware-bilinear taps in adjacent slices, clamped half a texel inside the tile so tiles
-// never bleed into each other. Solver units: grid cells and seconds.
-// Trilinear lookup at p (cell units, centres at +0.5) in an atlas of grid G with cols tiles per row; also used by
-// the ray march for the light atlas
+// --- Volume (Smoke) shaders ---
+// Each 3D field is a 2D atlas of Z-slice tiles (uCols per row), so every solver pass is one fullscreen draw.
 const V_SX = `
 vec4 Sx(sampler2D s, vec3 p, ivec3 G, int cols, vec2 atl) {
   p = clamp(p, vec3(0.5), vec3(G) - 0.5);
@@ -723,16 +690,13 @@ uniform ivec3 uG;
 uniform int uCols;
 uniform vec2 uAtl;
 ivec2 texOf(ivec3 c) { return ivec2(c.z % uCols, c.z / uCols) * uG.xy + c.xy; }
-// fragment → cell; false on the unused tiles at the end of the atlas
 bool cell(out ivec3 c) {
   ivec2 f = ivec2(gl_FragCoord.xy), t = f / uG.xy;
   c = ivec3(f - t * uG.xy, t.y * uCols + t.x);
   return c.z < uG.z;
 }
-// neighbour fetch clamped to the grid (zero gradient: open boundary)
 vec4 F(sampler2D s, ivec3 c) { return texelFetch(s, texOf(clamp(c, ivec3(0), uG - 1)), 0); }
-// Pressure and divergence are packed 4 cells along x per RGBA texel (grid uGp = X/4, Y, Z, same tile order),
-// so a Jacobi iteration updates 4 cells with 7 fetches. p = 0 outside the grid (open boundary).
+// Pressure and divergence pack 4 cells along x per RGBA texel (grid uGp = X/4, Y, Z).
 uniform ivec3 uGp;
 ivec2 ptexOf(ivec3 c) { return ivec2(c.z % uCols, c.z / uCols) * uGp.xy + c.xy; }
 bool pcell(out ivec3 c) {
@@ -748,12 +712,9 @@ float P0(sampler2D s, ivec3 c) {
 }
 ${V_SX}
 vec4 S(sampler2D s, vec3 p) { return Sx(s, p, uG, uCols, uAtl); }
-// Open faces for the scalars: a backtrace that leaves the grid brings in clean air. Weight of the source sample at
-// p: 1 up to the outer cell centres, fading to 0 half a cell outside the face (a zero ghost cell).
 float inflow(vec3 p) { vec3 e = min(p, vec3(uG) - p); return clamp(min(min(e.x, e.y), e.z) + 0.5, 0.0, 1.0); }
 `;
 
-// Soft spherical emitters swept along this frame's stroke segments (capsules on the mid plane)
 const V_BRUSH = `
 uniform int uN;
 uniform vec3 uEA[16];
@@ -773,7 +734,6 @@ float brush(vec3 p, out vec3 rel, out int bi) {
 }
 `;
 
-// Value noise for the emitters (only evaluated inside a brush)
 const V_NOISE = `
 float hash3(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
 float vnoise(vec3 p) {
@@ -786,8 +746,7 @@ float vnoise(vec3 p) {
 `;
 
 const VFS = {
-  // Scalars (x: density, y: temperature, z: freshness), MacCormack step 1: semi-Lagrangian advection (RK2
-  // backtrace) by last step's divergence-free velocity
+  // Scalars x: density, y: temperature, z: freshness. MacCormack advection: advS, then advS2.
   advS: V_ATLAS + `uniform sampler2D uVel, uSrc; uniform float uDt;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
@@ -797,13 +756,6 @@ void main() {
   o = S(uSrc, b) * inflow(b);
 }`,
 
-  // MacCormack step 2: trace the result forward again and correct by half the round-trip error. Where the
-  // corrected value overshoots the source cell's neighbourhood it falls back to the semi-Lagrangian value (a clamp
-  // to the maximum would keep the overshoot); where it undershoots it is clamped to the neighbourhood minimum (a
-  // fallback would lift it back up at every plume edge). Each picks the lower of the two options, but the clamp
-  // still lifts undershoots, so with no emitter active (uN = 0) the density is scaled by the mass cap's factor
-  // (massCap), which keeps its total from growing. Then decay, and the emitters: noisy density is added,
-  // temperature and freshness are set to the brush profile.
   advS2: V_ATLAS + V_BRUSH + V_NOISE + `uniform sampler2D uVel, uSrc, uHat, uMass; uniform float uDt, uDRate, uDMax, uTRate, uTime; uniform vec3 uDecay;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
@@ -816,7 +768,6 @@ void main() {
     vec4 q = F(uSrc, i0 + ivec3(k & 1, (k >> 1) & 1, k >> 2));
     lo = min(lo, q); hi = max(hi, q);
   }
-  // inflow through an open face scales the neighbourhood like it scaled hat
   float wi = inflow(b);
   lo *= wi; hi *= wi;
   vec4 hat = texelFetch(uHat, texOf(c), 0);
@@ -827,7 +778,6 @@ void main() {
   vec3 rel; int bi;
   float w = brush(p, rel, bi);
   if (w > 1e-3) {
-    // heat builds up while the gas passes the emitter, so the hot core is shaped by the flow (a flame, not a ball)
     float n = vnoise(p * 0.22 + vec3(0.0, -uTime * 2.5, uTime * 0.8));
     s.x = min(s.x + uDRate * uDt * w * (0.25 + 1.5 * n * n), uDMax);
     s.y = min(s.y + uTRate * uDt * w * (0.4 + 1.2 * n), 1.2);
@@ -836,8 +786,6 @@ void main() {
   o = s;
 }`,
 
-  // Mass cap, 1: each texel sums a 4×4 block of uSrc (texels past its edge count 0), so a few passes take the
-  // scalar atlas down to its totals in one RGBA32F texel
   sum: `uniform sampler2D uSrc;
 void main() {
   ivec2 b = ivec2(gl_FragCoord.xy) * 4, n = textureSize(uSrc, 0);
@@ -849,10 +797,6 @@ void main() {
   o = s;
 }`,
 
-  // Mass cap, 2: x = this step's density total (uSum), y = the factor advS2 scales the limited density by. Last
-  // step's limited total is this total over last step's factor and decay (uDk), so y = min(1, last step's total /
-  // its limited total) and the total cannot grow. y = 1 when uOn = 0 (last step injected, or the grid is new) and
-  // when there is no density.
   mass: `uniform sampler2D uSum, uPrev; uniform float uOn, uDk;
 void main() {
   float m = texelFetch(uSum, ivec2(0), 0).x;
@@ -867,7 +811,6 @@ void main() {
   o = vec4(S(uVel, p - uDt * F(uVel, c).xyz).xyz * uDamp, 0.0);
 }`,
 
-  // xyz: vorticity (curl of velocity), w: its magnitude
   curl: V_ATLAS + `uniform sampler2D uVel;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
@@ -878,8 +821,6 @@ void main() {
   o = vec4(w, length(w));
 }`,
 
-  // Vorticity confinement, buoyancy (hot gas rises; fresh smoke keeps a little lift), ABC-flow turbulence where
-  // there is smoke, and the emitters: a pull toward the pointer velocity plus a gentle outward push.
   force: V_ATLAS + V_BRUSH + `uniform sampler2D uVel, uCurl, uScal;
 uniform float uDt, uEps, uBuoy, uTurb, uTF, uTime, uKin, uPush;
 uniform vec3 uEV[16];
@@ -891,7 +832,6 @@ void main() {
                 F(uCurl, c + ivec3(0, 1, 0)).w - F(uCurl, c - ivec3(0, 1, 0)).w,
                 F(uCurl, c + ivec3(0, 0, 1)).w - F(uCurl, c - ivec3(0, 0, 1)).w);
   vec4 s = F(uScal, c);
-  // confinement only where there is smoke, so empty air cannot feed back on itself
   vec3 f = uEps * min(s.x * 4.0, 1.0) * cross(g / (length(g) + 1e-4), w);
 
   f.y += uBuoy * (s.y + 0.45 * s.z);
@@ -913,7 +853,6 @@ void main() {
   o = vec4(v, 0.0);
 }`,
 
-  // Divergence of 4 consecutive cells (packed layout)
   div: V_ATLAS + `uniform sampler2D uVel;
 void main() {
   ivec3 c; if (!pcell(c)) { o = vec4(0.0); return; }
@@ -929,7 +868,7 @@ void main() {
   o = d;
 }`,
 
-  // One Jacobi iteration of lap(p) = div for 4 cells; uMul < 1 on the first iteration damps the warm start
+  // One Jacobi iteration for 4 cells; uMul < 1 on the first iteration damps the warm start
   jacobi: V_ATLAS + `uniform sampler2D uP, uDiv; uniform float uMul;
 void main() {
   ivec3 c; if (!pcell(c)) { o = vec4(0.0); return; }
@@ -948,10 +887,6 @@ void main() {
   o = vec4(F(uVel, c).xyz - g, 0.0);
 }`,
 
-  // Resize / quality change: resample an old atlas (grid uGo, uColso tiles per row) into the current grid. With
-  // uK = 0 each axis is stretched by its own grid ratio; with uK > 0 a new cell spans uK old cells about the
-  // centre (the scene keeps its size on screen) and what falls outside the old box is empty. Velocity (uVmax > 0)
-  // is capped at uVmax cells/s, so a very uneven per-axis stretch cannot blow it up.
   resample: V_ATLAS + `uniform sampler2D uSrc; uniform ivec3 uGo; uniform int uColso; uniform vec2 uAtlo; uniform vec4 uMul; uniform float uVmax, uK;
 void main() {
   ivec3 c; if (!cell(c)) { o = vec4(0.0); return; }
@@ -961,10 +896,6 @@ void main() {
   if (uVmax > 0.0) o.xyz *= min(1.0, uVmax / max(length(o.xyz), 1e-6));
 }`,
 
-  // Light volume at half resolution, one draw over its own atlas (uLg cells per tile, uLc tiles per row; a few
-  // small layered draws would cost far more than the work in them): rgb = emitter point light × falloff ×
-  // transmittance (marched toward the emitter, stopping at its radius) + key light from above × transmittance;
-  // a = key-light transmittance.
   light: `precision highp sampler3D;
 uniform sampler3D uDen;
 uniform ivec3 uLg; uniform int uLc;
@@ -979,7 +910,6 @@ void main() {
   vec3 tl = uLp - p;
   float dist = length(tl);
   vec3 dir = tl / max(dist, 1e-4);
-  // steps grow quadratically away from the cell: fine near (soft self-shadow detail), coarse far away
   const int N = 14;
   float span = max(dist - uLRad, 0.0), tau = 0.0;
   for (int i = 0; i < N; i++) {
@@ -997,18 +927,14 @@ void main() {
   o = vec4(uLcol * (Tp / (1.0 + dist * dist * uFall)) + uKcol * Tk, Tk);
 }`,
 
-  // Ray march through the box: fixed camera on +z with mild perspective, the mid plane z = 0 exactly fills the
-  // screen. Beer–Lambert absorption, single scattering of the light volume (+ ambient for multiple scattering),
-  // emission from temperature, jittered start. rgb: premultiplied radiance, a: opacity.
   march: COMMON + V_SX + `precision highp sampler3D;
 uniform sampler3D uDen;
 uniform sampler2D uLit; uniform ivec3 uLg; uniform int uLc; uniform vec2 uLAtl;
 uniform vec3 uBox, uHot, uEmb, uAlb, uTail, uAmb, uKcol;
 uniform float uCam, uAspect, uExt, uStep, uFrameF, uEmis;
-// below this density a step's opacity is about 1e-5 or less (see d below): skip the light fetch and shading
+// below this density a step's opacity is about 1e-5: skip the light fetch and shading
 const float SHADE_MIN = 0.01;
 #ifdef DETAIL
-// Sub-grid detail (pv.marchD, see VT): the two noise-coordinate atlases share the light atlas layout
 uniform sampler2D uCrdA, uCrdB;
 uniform sampler3D uNz;
 uniform vec3 uGc, uNo0, uNo1;
@@ -1032,9 +958,6 @@ void main() {
       vec3 u = (ro + rd * t) * inv + 0.5;
       vec4 s = texture(uDen, u);
 #ifdef DETAIL
-      // Sub-grid detail near smoke (empty space costs what it did). A, B: noise coordinates of the two phases;
-      // A.w: local average density, so only big billows get detail (thin tendrils keep the grid look);
-      // B.w: how much to hold it back (hot flame gas, fast jets, over-stretched noise).
       if (s.x > 1e-4) {
         vec3 pl = u * vec3(uLg);
         vec4 A = Sx(uCrdA, pl, uLg, uLc, uLAtl);
@@ -1043,9 +966,6 @@ void main() {
           vec4 B = Sx(uCrdB, pl, uLg, uLc, uLAtl);
           g *= 1.0 - B.w;
           if (g > 0.01) {
-            // noise on advected coordinates (it moves, stretches and curls with the smoke): two phases half a
-            // period apart, each restarted where its weight is zero (uPh = weights); rgb displaces the density
-            // lookup (curl noise: divergence-free), a modulates it
             vec3 pc = u * uGc;
             vec3 qa = (pc + A.xyz) * uDetF + uNo0, qb = (pc + B.xyz) * uDetF + uNo1;
             vec4 n = texture(uNz, qa) * uPh.x + texture(uNz, qb) * uPh.y - 0.5 * (uPh.x + uPh.y);
@@ -1060,12 +980,10 @@ void main() {
       if (s.x > SHADE_MIN) {
         vec3 e = min(u, 1.0 - u) * uBox;
         float hot = smoothstep(0.1, 0.9, s.y);
-        // hot gas is thin and glowing; thin haze fades out faster than dense smoke (crisper wisps); fade at the box faces
         float d = s.x * (1.0 - 0.55 * hot) * smoothstep(0.0, 0.3, s.x) * smoothstep(0.0, 0.04, min(min(e.x, e.y), e.z));
         float a = 1.0 - exp(-d * uExt * uStep);
         vec4 L = Sx(uLit, u * vec3(uLg), uLg, uLc, uLAtl);
         vec3 alb = mix(uTail, uAlb, s.z) * (1.0 - 0.75 * hot);
-        // key light (single scattering) reads a little paler than the deep, saturated ambient/glow-lit smoke
         vec3 key = uKcol * L.a;
         vec3 albK = mix(alb, vec3(max(alb.r, max(alb.g, alb.b))), 0.12);
         vec3 em = mix(uEmb, uHot, smoothstep(0.7, 1.15, s.y)) * (uEmis * hot * hot);
@@ -1079,14 +997,13 @@ void main() {
   o = vec4(col, 1.0 - T);
 }`,
 
-  // Background + upsampled ray-march layer into the HDR scene (then the shared bloom + tonemap)
   comp: `uniform sampler2D uMarch; uniform vec2 uMTexel; uniform float uAspect, uAir; uniform vec3 uBg0, uBg1, uLightCol; uniform vec2 uLightPos;
 void main() {
   vec2 q = (vUv - vec2(0.5, 0.42)) * vec2(uAspect, 1.0);
   vec3 bg = mix(uBg1, uBg0, smoothstep(0.0, 1.0, length(q)));
   vec2 dl = (vUv - uLightPos) * vec2(uAspect, 1.0);
   bg += uLightCol * uAir / (1.0 + dot(dl, dl) * 30.0);
-  // 4 bilinear taps = a soft 3×3 tent in march texels: upsamples and hides the jittered-start noise
+  // 4 bilinear taps = a soft 3x3 tent: upsamples and hides the jittered-start noise
   vec2 t = uMTexel * 0.75;
   vec4 m = 0.25 * (texture(uMarch, vUv + vec2(-t.x, -t.y)) + texture(uMarch, vUv + vec2(t.x, -t.y))
                  + texture(uMarch, vUv + vec2(-t.x, t.y)) + texture(uMarch, vUv + vec2(t.x, t.y)));
@@ -1094,19 +1011,11 @@ void main() {
 }`,
 };
 
-// Sub-grid detail (VT), compiled apart from VFS so a failure here only turns the detail off: noise coordinates,
-// one atlas per noise phase on the half-res grid, laid out like the light atlas (plain 2D draws, which are far
-// cheaper here than layered draws into a 3D texture). xyz = offset from the cell to where its smoke was when the
-// phase started (cells), advected with the flow (semi-Lagrangian) and zeroed when the phase restarts. w: phase A =
-// density averaged over the 4×4×4 cells around the voxel (gates the detail to big billows); phase B = how much to
-// hold the detail back (hot flame gas, fast jets, noise over-stretched in either phase, i.e. squeezed finer than
-// the ray march can sample; a phase's stretch fades out with its blend weight before it restarts, so the phase
-// that is about to restart never gates the other one).
 const V_CRD = V_ATLAS + `precision highp sampler3D;
 uniform sampler2D uVel, uCrd, uCrdO; uniform sampler3D uDen;
 uniform ivec3 uLg; uniform int uLc; uniform vec2 uLAtl, uFast, uStr, uPhW; uniform float uDt, uReset; uniform int uCh;
 vec3 FL(sampler2D s, ivec3 c) { c = clamp(c, ivec3(0), uLg - 1); return texelFetch(s, ivec2(c.z % uLc, c.z / uLc) * uLg.xy + c.xy, 0).xyz; }
-// Frobenius norm of the Jacobian of the noise coordinates p + phi(p): sqrt 3 when unstretched
+// Frobenius norm of the Jacobian of p + phi(p): sqrt 3 when unstretched
 float stretch(sampler2D s, ivec3 c) {
   mat3 J = mat3(1.0) + mat3(FL(s, c + ivec3(1, 0, 0)) - FL(s, c - ivec3(1, 0, 0)),
                             FL(s, c + ivec3(0, 1, 0)) - FL(s, c - ivec3(0, 1, 0)),
@@ -1125,15 +1034,12 @@ void main() {
   for (int j = 0; j < 8; j++) a += texture(uDen, (c + vec3(j & 1, (j >> 1) & 1, j >> 2) * 2.0 - 1.0) * inv).xy;
   a *= 0.125;
   if (uCh == 0) { o = vec4(phi, a.x); return; }
-  // stretch of the new A and of B, each in full while its phase weight (uPhW) is 0.5 or more, then fading with it
-  // to 0 at its restart (a plain weighted mean would let half-weight stretched noise through as streaks)
   float sa = smoothstep(uStr.x, uStr.y, stretch(uCrdO, h)) * min(1.0, 2.0 * uPhW.x);
   float sb = uReset > 0.5 ? 0.0 : smoothstep(uStr.x, uStr.y, stretch(uCrd, h)) * min(1.0, 2.0 * uPhW.y);
   o = vec4(phi, max(max(smoothstep(0.04, 0.3, a.y), smoothstep(uFast.x, uFast.y, length(v))), max(sa, sb)));
 }`;
 
-// The density copy into a TEXTURE_3D writes MRT layers (no gl_Layer in WebGL2): each draw attaches n consecutive
-// layers starting at uL0, and at(k) computes layer k at this fragment.
+// No gl_Layer in WebGL2: each draw writes n consecutive TEXTURE_3D layers from uL0 as MRT outputs.
 function fsLayers(body, n) {
   let outs = '', calls = '';
   for (let j = 0; j < n; j++) { outs += `layout(location = ${j}) out vec4 o${j};\n`; calls += `  o${j} = at(uL0 + ${j});\n`; }
@@ -1146,13 +1052,10 @@ ${body}
 void main() {
 ${calls}}`;
 }
-// Scalar atlas → TEXTURE_3D (hardware trilinear for the light pass and the ray march)
 const V_TO3D = `uniform sampler2D uSrc; uniform ivec3 uG; uniform int uCols;
 vec4 at(int k) { k = min(k, uG.z - 1); return texelFetch(uSrc, ivec2(k % uCols, k / uCols) * uG.xy + ivec2(gl_FragCoord.xy), 0); }`;
 
-/* ------------------------------------------------------------------ */
-/* GL plumbing                                                        */
-/* ------------------------------------------------------------------ */
+// --- GL plumbing ---
 function compile(type, src) {
   const s = gl.createShader(type);
   gl.shaderSource(s, src);
@@ -1187,7 +1090,6 @@ try {
   fail('A shader failed to compile on this graphics driver. The browser console has the details.');
   return;
 }
-// Volume mode programs: if any of them fails, only the volume mode is disabled
 let volOK = true;
 const pv = {};
 try {
@@ -1197,7 +1099,6 @@ try {
   volOK = false;
   P.mode = 'particles';
 }
-// Sub-grid detail programs: if either fails, Smoke keeps the plain march
 let vDet = volOK;
 if (volOK) {
   try {
@@ -1298,18 +1199,14 @@ function resampleDouble(old, w, h, fmt, filter) {
   return d;
 }
 
-/* ------------------------------------------------------------------ */
-/* Targets                                                            */
-/* ------------------------------------------------------------------ */
+// --- Targets ---
 let cssW = 0, cssH = 0, dpr = 1, aspect = 1;
 let velocity, dye, pressure, divergence, curlT, pstate;
 let accum, dens, densTmp, densBlur, lightT, scene, bloomLv = [];
 let PW = 0, PH = 0, N = 0, head = 0, simScale = 1;
 
-// Grid size for a short side of `res`; the long side is capped so extreme window shapes stay within the GPU limit
 const dims = (res) => aspect >= 1 ? [Math.min(maxTex, Math.round(res * aspect)), res] : [res, Math.min(maxTex, Math.round(res / aspect))];
 
-// Lava's targets follow Lava's quality, also while Smoke runs (so switching effects never rebuilds them)
 const lavaQ = () => QUALITY[fxGet('particles', 'quality')];
 function buildSim() {
   const q = lavaQ();
@@ -1352,30 +1249,15 @@ function buildScreen() {
   for (let i = 0; i < 6 && w >= 4 && h >= 4; i++) { bloomLv.push(makeFBO(w, h, FMT.rgba, gl.LINEAR)); w >>= 1; h >>= 1; }
   if (!bloomLv.length) bloomLv.push(makeFBO(Math.max(1, w), Math.max(1, h), FMT.rgba, gl.LINEAR));
 }
-// Volume mode targets: the solver atlases (velocity; scalars = density, temperature, freshness; curl; divergence;
-// pressure), a TEXTURE_3D copy of the scalars for rendering, the half-res light atlas, the two half-res detail
-// atlases (noise coordinates, same layout as the light atlas) and the reduced-res ray-march layer.
-// Built on first use and kept while Lava runs, so an effect round trip keeps the scene. A resize, quality change or
-// governor step resamples the old fields into the new grid (the detail atlases start over). The detail noise
-// texture does not depend on the grid: it is made with the first grid and kept.
 const max3D = gl.getParameter(gl.MAX_3D_TEXTURE_SIZE);
 let vol3 = null, vMarchT = null, vNoise = null, grid2DText = '–';
-let volFail = ''; // grid that could not be built for this window ('' = the volume is ready)
-const V_RAYS = 6; // ray-march rays per grid cell; more add no detail (comp's tent filter smooths them anyway)
-const VOL_MIN_PX = 32; // Smoke is frozen (no step, no new grid) while the window's short side is under this (CSS px)
-const VOL_SETTLE = 0.25; // s a resized window must keep its size before Smoke moves the scene to a new grid
-let volSettle = 0; // s left until then
-// Smoke's QUALITY row: Smoke's selected quality minus the rows the frame-rate governor has stepped down
-// (governVolume), never below Low. The governor changes only this, never a selected quality or Lava.
+let volFail = '';
+const V_RAYS = 6; // ray-march rays per grid cell
+const VOL_MIN_PX = 32;
+const VOL_SETTLE = 0.25;
+let volSettle = 0;
 const QKEYS = Object.keys(QUALITY);
 let volDrop = 0;
-// t: s governed, slow/fast: s spent under VOL_FPS / at VOL_FPS_UP or more (lower under a cap), wait: s until the
-// next step is allowed, fps0, r0: frame rate before the last step down and the row it left (fps0 0 = checked), hold,
-// hr: t until which it does not step down from row hr (a step down from it did not help), fails: such steps from hr
-// in a row, drops: confirmed steps down from each row, ban: t until which the step up into each row is skipped, n,
-// s, fr: frames counted, their length in s and the lengths one by one (the last 2 s, at least 3 frames: the frame
-// rate the steps are judged by), skip: frames still to leave out of that count, cap: frame rate a step down did not
-// raise (0 = none; it ends with the hold), lift: s spent 15 % over it
 const gov = { t: 0, slow: 0, fast: 0, wait: 0, fps0: 0, r0: 0, hold: 0, hr: -1, fails: 0, drops: QKEYS.map(() => 0), ban: QKEYS.map(() => 0), n: 0, s: 0, fr: [], skip: 2, cap: 0, lift: 0 };
 const volLevel = (sel = fxGet('volume', 'quality')) => QKEYS[Math.max(0, QKEYS.indexOf(sel) - volDrop)];
 
@@ -1412,8 +1294,6 @@ function make3D(w, h, d, n = vMRT) {
   return { tex, w, h, d, fbos, ok };
 }
 function free3DTex(t) { if (t) { gl.deleteTexture(t.tex); for (const f of t.fbos) gl.deleteFramebuffer(f.fbo); } }
-// The renderer needs layered draws into a filterable RGBA16F TEXTURE_3D; without them volume mode is unavailable.
-// The density copy attaches 8 layers per draw where the GPU allows it (half the nearly empty passes of 4).
 let vMRT = 0;
 if (volOK) {
   const n8 = Math.min(gl.getParameter(gl.MAX_DRAW_BUFFERS), gl.getParameter(gl.MAX_COLOR_ATTACHMENTS)) >= 8;
@@ -1426,14 +1306,10 @@ if (volOK) {
   if (!vMRT || max3D < 128) { console.error(MODE_LABEL.volume + ' is disabled: cannot render to 3D textures.'); volOK = false; P.mode = 'particles'; }
 }
 
-// Tileable 64³ detail noise (RGBA8, made once, about 40 ms): rgb = curl of a gradient-noise vector potential (a
-// divergence-free displacement), a = scalar gradient noise. 16 noise cells per side, 4 texels each. null if the
-// texture cannot be made (Smoke then keeps the plain march).
 function makeNoise3D() {
-  const S = 64, C = 16, nch = 4, M = S - 1; // 4 texels per noise cell (S = 4·C, both powers of two)
+  const S = 64, C = 16, nch = 4, M = S - 1;
   let st = 0x9E3779B9;
   const rnd = () => { st ^= st << 13; st ^= st >>> 17; st ^= st << 5; return (st >>> 0) / 4294967296; };
-  // random unit gradients, stored per lattice cell for all channels
   const G = new Float64Array(C * C * C * nch * 3);
   for (let c = 0; c < nch; c++) {
     for (let i = 0; i < C * C * C; i++) {
@@ -1467,7 +1343,6 @@ function makeNoise3D() {
       }
     }
   }
-  // curl of the first three channels (central differences, wrapping) → divergence-free displacement
   const curl = new Float32Array(S * S * S * 3);
   const I = (x, y, z) => (((z & M) * S + (y & M)) * S + (x & M)) * nch;
   let sum = 0, sumA = 0;
@@ -1480,7 +1355,6 @@ function makeNoise3D() {
     sum += curl[i] * curl[i] + curl[i + 1] * curl[i + 1] + curl[i + 2] * curl[i + 2];
     const a = f[(i / 3) * nch + 3]; sumA += a * a;
   }
-  // both normalised to an rms of 1/2.2 per component, encoded as v * 0.5 + 0.5
   const sv = 1 / (2.2 * Math.sqrt(sum / (S * S * S * 3))), sa = 1 / (2.2 * Math.sqrt(sumA / (S * S * S)));
   const enc = (v) => Math.max(0, Math.min(255, Math.round((v * 0.5 + 0.5) * 255)));
   const out = new Uint8Array(S * S * S * 4);
@@ -1500,7 +1374,6 @@ function makeNoise3D() {
   return { tex };
 }
 
-// Tiles per row for an atlas of Z slices of X×Y: the squarest layout within the texture limit (0 if none fits)
 function tileCols(X, Y, Z) {
   let cols = 0, best = Infinity;
   for (let c = 1; c <= Z; c++) {
@@ -1511,16 +1384,12 @@ function tileCols(X, Y, Z) {
   }
   return cols;
 }
-// 3D grid for the current window: q.g cubic cells on the short screen side, depth q.gz × that. The atlas packs the
-// Z slices `cols` per row.
 function grid3D(quality = volLevel()) {
   const q = QUALITY[quality];
-  // Extreme window shapes (an iframe collapsing to a few px) are capped so even the s = 16 floor fits the
-  // 3D texture limit; the volume then covers the middle of the screen
   const a = Math.min(Math.max(aspect, 1 / aspect), max3D / 16);
   let s = q.g;
   for (;;) {
-    // X is a multiple of 4 (pressure is packed 4 cells per texel along x)
+    // X is a multiple of 4: pressure packs 4 cells per texel along x
     const lng = Math.round(s * a);
     const [X, Y] = aspect >= 1 ? [Math.max(4, Math.round(lng / 4) * 4), s] : [Math.max(4, Math.round(s / 4) * 4), lng];
     const Z = Math.max(8, Math.round((s * q.gz) / 4) * 4);
@@ -1540,7 +1409,6 @@ function free3DSim(V) {
   V.sum.forEach(freeFBO); freeDouble(V.mass);
   free3DTex(V.den3); freeFBO(V.lit); freeDouble(V.crdA); freeDouble(V.crdB);
 }
-// Detail atlases for grid V (two noise-coordinate phases, light atlas layout); false if the driver refused them
 function buildDetail(V) {
   if (!vNoise) {
     try { vNoise = makeNoise3D(); } catch (err) { console.warn(MODE_LABEL.volume + "'s detail noise is disabled:", err); }
@@ -1558,21 +1426,16 @@ function buildDetail(V) {
 }
 function build3D() {
   if (!volOK || !cssW) return false;
-  // A window collapsed to a sliver (an iframe or panel closing) freezes the scene in the grid it has: the solver in
-  // a grid a few cells across whips up cross-flow, which would come back with the scene when the window does.
   if (Math.min(cssW, cssH) < VOL_MIN_PX) return false;
   const g = grid3D();
   if (!g) return volFailed('none');
   const old = vol3;
   if (!old || old.X !== g.X || old.Y !== g.Y || old.Z !== g.Z || old.cols !== g.cols) {
-    // While the window is still changing size (a drag, an animated panel, a rotation) the scene stays frozen in its
-    // grid and moves once the size has settled, so it is never stepped through the narrow grids in between.
     if (old && volSettle > 0) return false;
-    // a grid the driver refused is not retried every frame, only when the window or quality changes
     const key = [g.X, g.Y, g.Z, g.cols].join();
     if (key === volFail) return false;
     const V = g;
-    V.pxc = cssH / g.Y; V.w = cssW; V.h = cssH; // CSS px per cell, window size (for the next resample)
+    V.pxc = cssH / g.Y; V.w = cssW; V.h = cssH;
     V.LX = Math.ceil(g.X / 2); V.LY = Math.ceil(g.Y / 2); V.LZ = Math.ceil(g.Z / 2); V.LC = tileCols(V.LX, V.LY, V.LZ);
     V.vel = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
     V.scal = makeDouble(g.AW, g.AH, FMT.rgba, gl.LINEAR);
@@ -1580,24 +1443,16 @@ function build3D() {
     V.curl = makeFBO(g.AW, g.AH, FMT.rgba, gl.NEAREST);
     V.div = makeFBO(g.PW, g.AH, FMT.rgba, gl.NEAREST);
     V.pres = makeDouble(g.PW, g.AH, FMT.rgba, gl.NEAREST);
-    // the mass cap's sums (4×4 blocks down to 1×1) and its state (massCap)
     V.sum = [];
     for (let w = g.AW, h = g.AH; w > 1 || h > 1;) { w = Math.ceil(w / 4); h = Math.ceil(h / 4); V.sum.push(makeFBO(w, h, FMT.rgba32, gl.NEAREST)); }
     V.mass = makeDouble(1, 1, FMT.rgba32, gl.NEAREST);
     V.den3 = make3D(g.X, g.Y, g.Z);
     V.lit = V.LC ? makeFBO(V.LC * V.LX, Math.ceil(V.LZ / V.LC) * V.LY, FMT.rgba, gl.LINEAR) : null;
-    // without its render targets the new grid is useless: keep the old sim, it is resampled once a size works again
     if (!V.den3.ok || !V.lit) { free3DSim(V); return volFailed(key); }
-    // the detail is optional: a grid without its atlases gets the plain march
     V.cyc = null; V.simDt = 0; V.massDk = 0;
     if (vDet) buildDetail(V);
     vol3 = V;
     if (old) {
-      // velocity is in cells/s. A rotation (width and height about swapped) stretches each axis by its own grid
-      // ratio, so the scene fills the turned screen and keeps its flow. Every other change (a quality step, a
-      // resize) keeps the scene's size on screen, centred: stretching it with the window would blow a plume that
-      // filled a narrow box up into a sideways sheet, and so would a few smaller stretches in a row (a window
-      // widened in steps). Either way velocity is capped at the emitters' top speed (step3D's vmax).
       const rot = (cssW > cssH) !== (old.w > old.h) && Math.abs(cssW / old.h - 1) < 0.3 && Math.abs(cssH / old.w - 1) < 0.3;
       const uk = rot ? 0 : V.pxc / old.pxc;
       const kv = uk ? [1 / uk, 1 / uk, 1 / uk, 1] : [g.X / old.X, g.Y / old.Y, g.Z / old.Z, 1];
@@ -1612,12 +1467,8 @@ function build3D() {
     updateGridHud();
     qualityLabels();
   } else {
-    // same grid in a new window (a zoom or a resize that keeps the shape): the scene is now shown at this size, so
-    // the next resample has to start from this scale, not the one the grid was built at
     old.pxc = cssH / old.Y; old.w = cssW; old.h = cssH;
   }
-  // march buffer: q.rm × CSS px, capped at V_RAYS rays per grid cell so big windows stop paying for extra rays
-  // (Y is the grid's cell count along the screen height in both orientations)
   const rm = Math.min(QUALITY[volLevel()].rm, (V_RAYS * vol3.Y) / cssH);
   vMarchT = remake(vMarchT, Math.max(2, Math.round(cssW * rm)), Math.max(2, Math.round(cssH * rm)), FMT.rgba, gl.LINEAR);
   if (volFail) { volFail = ''; updateGridHud(); }
@@ -1629,7 +1480,7 @@ function volFailed(key) {
 }
 function clear3D() {
   if (!vol3) return;
-  vol3.cyc = null; // the detail phases start over too
+  vol3.cyc = null;
   for (const d of [vol3.vel, vol3.scal, vol3.pres]) {
     for (const f of [d.read, d.write]) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, f.fbo); gl.viewport(0, 0, f.w, f.h);
@@ -1645,8 +1496,6 @@ function resize(force) {
   const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
   const d = Math.min(window.devicePixelRatio || 1, 2);
   if (!force && w === cssW && h === cssH && d === dpr) return;
-  // the autopilot's brush is in CSS px: scale it with the window, so its next stroke does not cross the screen
-  // from where it was in the old size (after a collapse to a sliver, a jet from the edge)
   if (cssW && cssH) {
     const sx = w / cssW, sy = h / cssH, p = demo.p;
     p.prevX *= sx; p.prevY *= sy; p.x *= sx; p.y *= sy;
@@ -1654,7 +1503,6 @@ function resize(force) {
   }
   cssW = w; cssH = h; dpr = d; aspect = w / h;
   volSettle = VOL_SETTLE;
-  // the governor starts over for the new window (a pending check of its last step waits for frames at this size)
   gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2; gov.hold = gov.fails = gov.cap = 0; gov.drops.fill(0); gov.ban.fill(0);
   if (gov.fps0) gov.wait = 3;
   canvas.width = Math.max(1, Math.round(w * d));
@@ -1662,23 +1510,18 @@ function resize(force) {
   buildSim();
   buildParticles();
   buildScreen();
-  // in Smoke the Quality menu lists the grid each row gives for this window shape
   if (P.mode === 'volume') qualityLabels();
 }
 
-/* ------------------------------------------------------------------ */
-/* Colour                                                             */
-/* ------------------------------------------------------------------ */
+// --- Colour ---
 const toLin = (hex) => { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => Math.pow(c / 255, 2.2)); };
 let pal;
 function preparePalette() {
   const p = PALETTES[P.palette];
   const hot = p.hot.map(toLin);
   pal = { hot, hotFlat: new Float32Array(hot.flat()), cool: toLin(p.cool), key: toLin(p.key), bg0: toLin(p.bg[0]), bg1: toLin(p.bg[1]) };
-  // Volume mode: glow of cooling smoke, albedo of cooled and of the oldest smoke, key-tinted ambient/key light
   const peak = (c) => Math.max(c[0], c[1], c[2], 1e-4);
   pal.ember = toLin(p.ember);
-  // albedos normalised by their peak channel, saturated colours a little brighter (they read darker)
   const sat = (c) => 1 + 0.6 * (1 - (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / peak(c));
   const al = toLin(p.smoke), tl = toLin(p.tail);
   pal.alb = al.map((v) => (v * 0.55 * sat(al)) / peak(al));
@@ -1694,9 +1537,7 @@ function palColor(t) {
   return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
 }
 
-/* ------------------------------------------------------------------ */
-/* Input                                                              */
-/* ------------------------------------------------------------------ */
+// --- Input ---
 const pointers = new Map();
 let hover = null;
 let interacted = false;
@@ -1707,7 +1548,7 @@ function newEmitter(x, y, hueOff) { return { x, y, prevX: x, prevY: y, path: [],
 canvas.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   canvas.focus({ preventScroll: true });
-  try { canvas.setPointerCapture(e.pointerId); } catch (_) { /* capture is optional */ }
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) { }
   const [x, y] = local(e);
   pointers.set(e.pointerId, newEmitter(x, y, pointers.size * 0.27));
   if (!interacted) {
@@ -1732,7 +1573,7 @@ canvas.addEventListener('lostpointercapture', release);
 canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hover = null; });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-/* Autopilot: a virtual brush that paints until someone takes over */
+// --- Autopilot ---
 const demo = { t: 0, on: false, p: newEmitter(0, 0, 0) };
 function updateDemo(dt) {
   if (!P.auto || pointers.size) { demo.on = false; return; }
@@ -1740,7 +1581,6 @@ function updateDemo(dt) {
   const t = demo.t;
   let x, y, on;
   if (P.mode === 'volume') {
-    // Volume mode: a slow wander through the lower part of the screen, so the plume rises across it
     x = (0.45 + 0.21 * Math.sin(t * 0.37) + 0.05 * Math.sin(t * 1.13 + 1.3)) * cssW;
     y = (0.73 + 0.08 * Math.sin(t * 0.61 + 0.6) + 0.03 * Math.cos(t * 1.37)) * cssH;
     on = (t % 7) < 5.6;
@@ -1756,14 +1596,12 @@ function updateDemo(dt) {
   if (reducedMotion && t > 5) setToggle('auto', false);
 }
 
-/* ------------------------------------------------------------------ */
-/* Per-frame stroke segments                                          */
-/* ------------------------------------------------------------------ */
+// --- Per-frame stroke segments ---
 const SEG = 16;
 const segA = new Float32Array(SEG * 2), segB = new Float32Array(SEG * 2);
 const segVel = new Float32Array(SEG * 4), segDye = new Float32Array(SEG * 4);
 const segHue = new Float32Array(SEG), segLen = new Float32Array(SEG), segEnd = new Int32Array(SEG);
-const segPx = new Float32Array(SEG * 2); // volume mode: the stroke's travel this frame (CSS px, y down)
+const segPx = new Float32Array(SEG * 2);
 let segN = 0;
 let hue = 0;
 const FORCE = 6000;
@@ -1781,8 +1619,6 @@ function addSeg(ax, ay, bx, by, dx, dy, distPx, col, amt, h) {
   segPx[i * 2] = dx * distPx; segPx[i * 2 + 1] = dy * distPx;
 }
 
-// Volume mode keeps the emission colour in the palette's hot[3] → hot[0] band (Aurora: green ↔ lime),
-// so the head never drifts toward the aged colour and the hot/cool contrast stays strong.
 function emitHue(h) {
   if (P.mode !== 'volume') return h;
   const f = ((h % 1) + 1) % 1;
@@ -1808,7 +1644,6 @@ function gather(dt, time) {
     const amt = 0.2 * P.emission * fr;
 
     if (L < 0.75) {
-      // Held still: a gently waving jet in the last stroke direction
       const wob = Math.sin(time * 2.6 + p.hueOff * 9) * 0.55;
       const c = Math.cos(wob), s = Math.sin(wob);
       addSeg(p.x, p.y, p.x, p.y, p.dirX * c - p.dirY * s, p.dirX * s + p.dirY * c, 7 * fr, col, amt, h);
@@ -1828,9 +1663,7 @@ function gather(dt, time) {
   return list;
 }
 
-/* ------------------------------------------------------------------ */
-/* Simulation                                                         */
-/* ------------------------------------------------------------------ */
+// --- Simulation ---
 let emitCarry = 0;
 const life = () => [1.6 * P.life, 5.0 * P.life];
 
@@ -1915,27 +1748,17 @@ function updateParticles(dt, time, frame) {
   head = (head + count) % N;
 }
 
-// Volume mode: one step of the 3D smoke solver. The emitters are soft spheres swept along this frame's stroke
-// segments on the mid plane (z = Z/2): a held pointer gives a gentle upward jet, a moving one drags the smoke along.
 const emA = new Float32Array(SEG * 3), emB = new Float32Array(SEG * 3), emV = new Float32Array(SEG * 3);
-const emitRadius = () => P.brush * 1.6; // screen heights
-const V_TAU = 4.1; // density e-folding time per unit of Lifetime (s)
-let volT = 0; // volume time (s): only step3D advances it, so the detail phases stand still with a frozen scene
-// Lifetime label in Smoke: seconds until smoke no longer shows (alpha < 0.05) after it leaves the emitter, measured
-// at High with default lift (mean over stops at 3–4.7 s of autopilot). It saturates because old smoke spreads thin
-// and rises off screen; coarser grids fade sooner (Medium about 20 %, Low about 25 %).
+const emitRadius = () => P.brush * 1.6;
+const V_TAU = 4.1; // density e-folding time (s) per unit of Lifetime
+let volT = 0;
 const volLife = (v) => 7.8 * (1 - Math.exp(-v / 0.92));
 function emitterUniforms() {
   ui('uN', segN); uarr('uEA', 'uniform3fv', emA); uarr('uEB', 'uniform3fv', emB);
   const r = emitRadius() * vol3.Y;
   uf('uRad2', r * r);
 }
-// Mass cap while no emitter is active. advS2's limiter lifts undershoots to the neighbourhood minimum, which adds a
-// little density every step; with nothing injected, a fading plume grew again by up to 28 % in the seconds after a
-// stroke ended. So each step without an emitter sums the density on the GPU, and advS2 scales the limited density
-// by min(1, last step's total / last step's limited total). The limited total is this step's total over last
-// step's factor and decay (V.massDk; 0 when last step injected or the grid is new), so one sum a step does it,
-// without a readback; the factor lags one step.
+// Without emitters advS2's limiter slowly adds density, so the total is capped at last step's (GPU sum, no readback).
 function massCap(V) {
   let src = V.scal.read;
   use(pv.sum);
@@ -1946,7 +1769,7 @@ function massCap(V) {
 }
 function step3D(dt, time) {
   const V = vol3, Y = V.Y, q = QUALITY[volLevel()];
-  V.simDt += dt; volT += dt; // the detail coordinates are advected by the simulated time at the next render
+  V.simDt += dt; volT += dt;
   const gx = (u) => (u - 0.5) * aspect * Y + V.X / 2;
   const kv = (0.7 * P.force * Y) / (cssH * Math.max(dt, 1e-3)), vmax = 1.5 * Y;
   for (let i = 0; i < segN; i++) {
@@ -1958,8 +1781,6 @@ function step3D(dt, time) {
     emV[i * 3] = vx * k; emV[i * 3 + 1] = vy * k; emV[i * 3 + 2] = 0;
   }
 
-  // 1. Scalars: MacCormack advection, decay (Lifetime, Cooling), injection at the emitters; without emitters,
-  // the mass cap
   const dk = Math.exp(-dt / (V_TAU * P.life));
   if (!segN) massCap(V);
   use(pv.advS); atlasU();
@@ -1972,12 +1793,10 @@ function step3D(dt, time) {
   draw(V.scal.write); V.scal.swap();
   V.massDk = segN ? 0 : dk;
 
-  // 2. Velocity self-advection
   use(pv.advV); atlasU();
   ut('uVel', 0, V.vel.read); uf('uDt', dt); uf('uDamp', Math.exp(-0.15 * dt));
   draw(V.vel.write); V.vel.swap();
 
-  // 3. Vorticity, then forces: confinement, buoyancy, turbulence, emitters
   use(pv.curl); atlasU(); ut('uVel', 0, V.vel.read); draw(V.curl);
   use(pv.force); atlasU(); emitterUniforms();
   ut('uVel', 0, V.vel.read); ut('uCurl', 1, V.curl); ut('uScal', 2, V.scal.read);
@@ -1986,7 +1805,6 @@ function step3D(dt, time) {
   uf('uKin', 0.6); uf('uPush', 0.5 * P.force * Y); uarr('uEV', 'uniform3fv', emV);
   draw(V.vel.write); V.vel.swap();
 
-  // 4. Pressure projection (Jacobi, warm-started from last frame)
   use(pv.div); atlasU(); ut('uVel', 0, V.vel.read); draw(V.div);
   use(pv.jacobi); atlasU();
   for (let i = 0; i < q.jac; i++) {
@@ -1997,9 +1815,7 @@ function step3D(dt, time) {
   draw(V.vel.write); V.vel.swap();
 }
 
-/* ------------------------------------------------------------------ */
-/* Lighting state                                                     */
-/* ------------------------------------------------------------------ */
+// --- Lighting state ---
 const light = { x: 0.5, y: 0.5, level: 0.3 };
 function updateLight(dt, emitters) {
   let tx = light.x, ty = light.y, lv = 0.3;
@@ -2011,13 +1827,10 @@ function updateLight(dt, emitters) {
   light.level += (lv - light.level) * kl;
 }
 
-/* ------------------------------------------------------------------ */
-/* Render                                                             */
-/* ------------------------------------------------------------------ */
+// --- Render ---
 function render(frame) {
   const [lmin, lmax] = life();
 
-  // 1. Particles → additive HDR buffer (rgb: colour·weight, a: density)
   gl.bindFramebuffer(gl.FRAMEBUFFER, accum.fbo);
   gl.viewport(0, 0, accum.w, accum.h);
   gl.clearColor(0, 0, 0, 0);
@@ -2035,7 +1848,6 @@ function render(frame) {
   }
   const dyeGain = P.showSmoke ? P.smoke : 0;
 
-  // 2. Density field at lighting resolution, blurred twice for smooth billow normals
   use(pr.density);
   ut('uDye', 0, dye.read); ut('uAcc', 1, accum);
   uf('uAccTexel', accum.tx, accum.ty); uf('uDyeGain', dyeGain); uf('uPartGain', 1);
@@ -2046,7 +1858,6 @@ function render(frame) {
   ut('uSrc', 0, densBlur); uf('uDir', dens.tx * 2, 0); draw(densTmp);
   ut('uSrc', 0, densTmp); uf('uDir', 0, dens.ty * 2); draw(densBlur);
 
-  // 3. Light: shadowed point light at the cursor + key light
   const lc = palColor(hue);
   const lp = light.level * P.light * 2.4;
   use(pr.light);
@@ -2058,7 +1869,6 @@ function render(frame) {
   uf('uKeyCol', pal.key[0] * 0.22, pal.key[1] * 0.22, pal.key[2] * 0.22);
   draw(lightT);
 
-  // 4. Composite into HDR scene
   use(pr.composite);
   ut('uDye', 0, dye.read); ut('uAcc', 1, accum); ut('uLightTex', 2, lightT); ut('uDens', 3, densBlur);
   uf('uDyeGain', dyeGain); uf('uPartGain', 1); uf('uScatter', 0.35); uf('uAspect', aspect);
@@ -2070,9 +1880,7 @@ function render(frame) {
   postFX(frame);
 }
 
-// Shared by both modes: scene → bloom → tonemapped screen
 function postFX(frame) {
-  // 5. Bloom: threshold → downsample chain → additive upsample
   const knee = 0.6, thr = 0.75;
   use(pr.bloomPre);
   ut('uSrc', 0, scene); uf('uTexel', scene.tx, scene.ty);
@@ -2084,37 +1892,25 @@ function postFX(frame) {
   for (let i = bloomLv.length - 1; i > 0; i--) { ut('uSrc', 0, bloomLv[i]); uf('uTexel', bloomLv[i].tx, bloomLv[i].ty); draw(bloomLv[i - 1]); }
   gl.disable(gl.BLEND);
 
-  // 6. Tonemap to screen
   use(pr.final);
   ut('uScene', 0, scene); ut('uBloom', 1, bloomLv[0]);
   uf('uBloomInt', 0.16 * P.bloom); uf('uExposure', 1.0); uf('uAspect', aspect); uf('uFrameF', frame % 64);
   draw(null);
 }
 
-/* Volume mode render: ray-marched 3D smoke                           */
-const V_CAM = 2.4;  // camera distance from the mid plane in screen heights (mild perspective)
+// --- Volume (Smoke) render ---
+const V_CAM = 2.4;  // camera distance from the mid plane (screen heights)
 const V_EXT = 9;   // extinction per unit density per screen height
-// Sub-grid detail in the ray march: the density lookup is displaced by curl noise whose coordinates are advected
-// with the flow (so it drifts, stretches and curls with the smoke), only in big, cooled billows.
-// detail: overall strength; 0 = exactly the plain grid look (the detail passes are skipped).
-// amp: displacement (cells), freq: noise cells per grid cell, flowT: period of each of the two noise phases (s),
-// oct2: second octave weight, mod/erode: density modulation/erosion by the noise, dlo/dhi: local average density
-// over which the detail fades in (big billows on, thin tendrils off), fast: speeds (cells/s) over which it fades out
-// (jets), str: noise stretch (Jacobian norm, √3 = none) over which it fades out (finer than the march can sample).
-// Sizes are in grid cells (the detail is sub-grid at every quality level, and the march steps one cell); speeds
-// are for a 112-cell screen height and scale with the grid like the solver's own velocities.
 const VT = { detail: 1, amp: 2.0, freq: 0.2, flowT: 1.2, oct2: 0.3, mod: 0.4, erode: 0, dlo: 0.04, dhi: 0.3, fast: [30, 60], str: [4.5, 8] };
 const V_KEY = (() => { const k = [0.45, 0.85, 0.28], l = Math.hypot(...k); return k.map((v) => v / l); })();
 function render3D(frame) {
   const V = vol3;
   const box = [V.X / V.Y / 2, 0.5, V.Z / V.Y / 2];
 
-  // 1. Scalar atlas → TEXTURE_3D (hardware trilinear for the passes below), vMRT layers per draw
   use(pv.to3d);
   ut('uSrc', 0, V.scal.read); ui3('uG', V.X, V.Y, V.Z); ui('uCols', V.cols);
   for (const f of V.den3.fbos) { ui('uL0', f.z0); draw(f); }
 
-  // 2. Light volume: point light at the emitter (its glow) + soft key light from above, both self-shadowed
   const hc = palColor(emitHue(hue));
   const lp = light.level * P.light * 1.6;
   const lc = [0, 1, 2].map((i) => (hc[i] + pal.ember[i]) * 0.5 * lp);
@@ -2127,9 +1923,7 @@ function render3D(frame) {
   uf('uLcol', ...lc); uf('uKcol', ...keyC); uf('uKd', ...V_KEY);
   draw(V.lit);
 
-  // 3. Detail: advect the two noise-coordinate phases by the simulated time, restarting a phase when its cycle wraps
   const det = VT.detail > 0 && !!V.crdA;
-  // triangular phase weights (zero at each phase's restart), on the volume clock
   const ph = volT / VT.flowT, cyc = [Math.floor(ph), Math.floor(ph + 0.5)];
   const w0 = 1 - Math.abs(2 * (ph - cyc[0]) - 1), w1 = 1 - w0;
   if (det) {
@@ -2137,7 +1931,6 @@ function render3D(frame) {
     ui3('uLg', V.LX, V.LY, V.LZ); ui('uLc', V.LC); uf('uLAtl', V.lit.tx, V.lit.ty);
     ut('uVel', 0, V.vel.read); ut3('uDen', 5, V.den3); uf('uDt', V.simDt);
     uf('uFast', VT.fast[0] * V.Y / 112, VT.fast[1] * V.Y / 112); uf('uStr', VT.str[0], VT.str[1]); uf('uPhW', w0, w1);
-    // phase A, then phase B (which also measures the stretch of the new A)
     [V.crdA, V.crdB].forEach((pp, i) => {
       ut('uCrd', 1, pp.read); ut('uCrdO', 2, V.crdA.read); ui('uCh', i);
       uf('uReset', !V.cyc || V.cyc[i] !== cyc[i] ? 1 : 0);
@@ -2147,7 +1940,6 @@ function render3D(frame) {
   } else V.cyc = null;
   V.simDt = 0;
 
-  // 4. Ray march at reduced resolution
   use(det ? pv.marchD : pv.march);
   ut3('uDen', 5, V.den3);
   ut('uLit', 6, V.lit); ui3('uLg', V.LX, V.LY, V.LZ); ui('uLc', V.LC); uf('uLAtl', V.lit.tx, V.lit.ty);
@@ -2156,7 +1948,6 @@ function render3D(frame) {
   uf('uHot', ...hc); uf('uEmb', ...pal.ember); uf('uAlb', ...pal.alb); uf('uTail', ...pal.tail);
   uf('uAmb', ...pal.amb.map((v) => v * P.light)); uf('uKcol', ...keyC);
   if (det) {
-    // the phase weights renormalised, so the blend keeps its contrast
     const wn = 1 / Math.hypot(w0, w1);
     ut('uCrdA', 7, V.crdA.read); ut('uCrdB', 8, V.crdB.read); ut3('uNz', 9, vNoise);
     uf('uGc', V.X, V.Y, V.Z); uf('uPh', w0 * wn, w1 * wn);
@@ -2166,12 +1957,10 @@ function render3D(frame) {
     uf('uMod', VT.detail * VT.mod); uf('uErode', VT.detail * VT.erode); uf('uDLo', VT.dlo); uf('uDHi', VT.dhi);
   }
   draw(vMarchT);
-  // unbind, so next frame's copy, light and detail passes never render into a texture that is still bound
   gl.activeTexture(gl.TEXTURE5); gl.bindTexture(gl.TEXTURE_3D, null);
   gl.activeTexture(gl.TEXTURE6); gl.bindTexture(gl.TEXTURE_2D, null);
   if (det) for (const u of [7, 8]) { gl.activeTexture(gl.TEXTURE0 + u); gl.bindTexture(gl.TEXTURE_2D, null); }
 
-  // 5. Composite over the background into the HDR scene, then the shared bloom + tonemap
   use(pv.comp);
   ut('uMarch', 0, vMarchT); uf('uMTexel', vMarchT.tx, vMarchT.ty);
   uf('uAspect', aspect); uf('uAir', 0.02 * light.level * P.light);
@@ -2194,54 +1983,28 @@ function clearAll() {
   clear3D();
 }
 
-/* ------------------------------------------------------------------ */
-/* Loop                                                               */
-/* ------------------------------------------------------------------ */
+// --- Loop ---
 let last = performance.now(), time = 0, frame = 0, fpsEMA = 60, hudT = 0;
-let volStepped = false; // this tick ran the volume solver (only those frames count for the governor)
-// Smoke's frame-rate governor: when the frame rate stays under VOL_FPS for 2 s, the volume grid steps down one
-// QUALITY row (at most once per 3 s, never below Low) and build3D resamples the scene into it. 3 s after a step
-// down, and after at least 3 frames in the new grid, it checks that the frame rate rose by 10 %; if not, the grid
-// was not what held it back (the browser caps requestAnimationFrame, e.g. at 30 Hz to save power, or another app
-// loads the GPU), so the step is undone and it does not step down from that row for 30 s (the hold), doubling with
-// each further such failure from that row (at most 4 min); a row above it that it steps up into and finds slow still
-// steps down as usual. The frame rate it had in the lower grid is then taken as a cap (gov.cap): until the hold ends
-// or the frame rate stays 15 % over it for 2 s (the cap was lifted), slow means under 85 % of the cap and fast 95 %
-// of it or more (never more than VOL_FPS and VOL_FPS_UP), so under a 30 Hz cap 30 fps counts as good and it does not
-// probe the rows below again and again. A grid that only just reaches the cap's rate never shows that the cap was
-// lifted, so the cap ends with the hold and the next step down finds out. A step down that helped keeps it out of
-// the row it left for 20 s, doubling with each further drop from that row (at most 4 min), so it does not swing
-// between two rows; after that, 5 s fast steps one row back up. Picking a quality starts over from that row, without
-// a cap; an effect switch or resize restarts the timers (the frames around them are slow anyway), and a resize forgets
-// the cap. Both frame rates in the check are frames per s over the last 2 s of whole frames, at least 3 (before the
-// step: of the slow spell, so a slowdown earlier in a long spell cannot make a useless step look like a gain; after
-// it: of the wait), as at 1–3 fps fpsEMA holds only the last frame or two. The clocks run in wall time, so the waits
-// are the same at any frame rate; slow, fast and the cap's lift count at most 0.25 s a frame, so one hitch is not
-// 2 s of slowness.
+let volStepped = false;
+// Frame-rate governor: steps Smoke's grid down a QUALITY row while slow, undoes steps that do not help, steps back up when fast.
 const VOL_FPS = 50, VOL_FPS_UP = 58;
 function governVolume(el) {
-  // el: the frame's length in s, 0 for the first frame after a pause. The count leaves out the first two frames
-  // after a grid change, a resize or a frame that did not step the volume: their time is the old grid's last
-  // frame, the resample or the frame in between.
   if (!volStepped || !el) { gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2; return; }
   const w = Math.min(el, 2), h = Math.min(el, 0.25);
   gov.t += w;
   gov.wait = Math.max(0, gov.wait - w);
   if (gov.skip) gov.skip--;
   else if (gov.wait <= 2) {
-    // the count slides: the oldest frame drops out while the rest still span 2 s and are at least 3
     gov.n++; gov.s += el; gov.fr.push(el);
     while (gov.fr.length > 3 && gov.s - gov.fr[0] >= 2) { gov.s -= gov.fr.shift(); gov.n--; }
   }
   if (gov.fps0 && !gov.wait && gov.n >= 3) {
     if (gov.n / gov.s < gov.fps0 * 1.1) {
-      if (gov.r0 !== gov.hr) gov.fails = 0; // the back-off is the row's: it doubles while the same row fails
+      if (gov.r0 !== gov.hr) gov.fails = 0;
       volDrop--; gov.hold = gov.t + Math.min(240, 30 * 2 ** gov.fails++); gov.hr = gov.r0; gov.wait = 3; qualityLabels();
-      gov.cap = gov.n / gov.s; gov.lift = 0; // a rate the grid did not limit
+      gov.cap = gov.n / gov.s; gov.lift = 0;
       gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
     } else {
-      // kept: the count goes on, its frames are this grid's. Only a step down from hr that helped ends its back-off
-      // (one from a row above it, stepped up into under the cap, says nothing about hr).
       if (gov.r0 === gov.hr) gov.fails = 0;
       gov.ban[gov.r0] = gov.t + Math.min(240, 20 * 2 ** gov.drops[gov.r0]++);
     }
@@ -2252,7 +2015,7 @@ function governVolume(el) {
   if (fpsEMA < lo) { gov.slow += h; gov.fast = 0; }
   else {
     gov.slow = 0; gov.fast = fpsEMA >= up ? gov.fast + h : 0;
-    if (!gov.fps0) gov.n = gov.s = gov.fr.length = 0; // the count for a step down covers the slow spell only
+    if (!gov.fps0) gov.n = gov.s = gov.fr.length = 0;
   }
   if (gov.wait || gov.fps0) return;
   const r = QKEYS.indexOf(volLevel());
@@ -2270,14 +2033,10 @@ function tick(dt) {
   if (!P.paused) { time += dt; updateDemo(dt); }
   const emitters = gather(dt, time);
   updateLight(dt, emitters);
-  // Smoke builds its targets on demand (so setting krakatoaDebug.P.mode directly also works). When they cannot
-  // be built for this window, the window is a sliver or it is still being resized, it shows its last state,
-  // frozen, and never falls back to Lava's scene.
   const volMode = P.mode === 'volume' && volOK;
   const vol = volMode && build3D();
   volStepped = false;
   if (!P.paused && vol === volMode) {
-    // Each effect simulates only its own scene; the other one stays as it was until you switch back
     if (segN) { hue += dt * 0.035; if (!vol) splat(); }
     if (vol) { step3D(dt, time); volStepped = true; }
     else {
@@ -2298,11 +2057,7 @@ function loop(now) {
   const dt = Math.min(Math.max(el, 0.001), 1 / 30);
   last = now;
   tick(dt);
-  // frame rate averaged over wall time (0.4 s), not over frames: it is as current at 1 fps as at 60, and each
-  // frame weighs by its length, so alternating 16.7 and 33.3 ms frames read 40, the frames actually shown per s.
-  // A gap of 5 s or more that is also at least 3 times the one before, or the first frame after the tab was hidden,
-  // is a pause, not a frame (gap 0); a long gap near the one before is this machine's frame time, so a very slow GPU
-  // still counts (and the HUD keeps up), also when its frames straddle 5 s.
+  // fps averaged over wall time (0.4 s); a gap of 5 s or more that is also 3x the previous one is a pause, not a frame
   const raw = loop.prev ? now - loop.prev : 0;
   const gap = raw && (raw < 5000 || raw < 3 * (loop.raw || 0)) ? Math.max(raw, 1) / 1000 : 0;
   loop.raw = raw;
@@ -2315,29 +2070,24 @@ function loop(now) {
   }
 }
 document.addEventListener('visibilitychange', () => { loop.prev = 0; });
-// Test hook: advance the simulation a fixed number of frames synchronously, independent of
-// requestAnimationFrame throttling. krakatoaDebug.run(240) = 4 s of autopilot at 60 fps.
-// krakatoaDebug.setMode('particles' | 'volume') switches effect (Lava | Smoke) like the panel does.
+// Test hook: run(n) steps n frames synchronously; setMode('particles' | 'volume') switches effect.
 window.krakatoaDebug = {
   P,
   run(frames = 240, dt = 1 / 60) { for (let i = 0; i < frames; i++) tick(dt); return frame; },
   setMode: (m) => setMode(m),
-  VT, // sub-grid detail settings for Smoke, read every frame (VT.detail = 0: the plain march)
+  VT,
   get volumeOK() { return volOK; },
   get grid3D() { return vol3 ? [vol3.X, vol3.Y, vol3.Z, vol3.AW, vol3.AH] : null; },
-  get volQuality() { return volLevel(); }, // the QUALITY row Smoke runs (its selected quality minus the governor's steps)
-  get detailOK() { return !!(vol3 && vol3.crdA); }, // the current grid has its detail atlases
+  get volQuality() { return volLevel(); },
+  get detailOK() { return !!(vol3 && vol3.crdA); },
 };
 
 canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fail('The graphics context was lost. Reload the page to start again.'); });
 
-/* ------------------------------------------------------------------ */
-/* UI                                                                 */
-/* ------------------------------------------------------------------ */
+// --- UI ---
 const panel = $('panel'), toggleBtn = $('panelToggle');
 const uiStored = uiLoad();
 if (typeof uiStored.auto === 'boolean') P.auto = uiStored.auto;
-// byHand: the button or H (remembered); the start-up default is not
 function setPanel(open, byHand) {
   panel.hidden = !open;
   toggleBtn.setAttribute('aria-expanded', String(open));
@@ -2346,8 +2096,6 @@ function setPanel(open, byHand) {
 toggleBtn.addEventListener('click', () => setPanel(panel.hidden, true));
 setPanel(typeof uiStored.panel === 'boolean' ? uiStored.panel : !(coarse || innerWidth < 640));
 
-// The running effect's settings are saved 0.4 s after the last change, when the effect is switched and when the
-// page is hidden or closed
 let fxSaveT = 0;
 function fxSaveNow() { clearTimeout(fxSaveT); fxSaveT = 0; fxSave(P.mode, fxPick()); }
 function fxSaveSoon() { clearTimeout(fxSaveT); fxSaveT = setTimeout(fxSaveNow, 400); }
@@ -2363,9 +2111,6 @@ function setPalette(i) {
   document.querySelectorAll('.swatch').forEach((b, j) => b.setAttribute('aria-pressed', String(j === i)));
 }
 const pickPalette = (i) => { setPalette(i); fxSaveSoon(); };
-// A swatch shows the colours the running effect uses, from emission to the oldest smoke. Lava: the hot cycle into
-// the cool colour. Smoke: its emission band (hot[0] ↔ hot[3], see emitHue), the ember glow, then the albedo of
-// cooled and of the oldest smoke.
 function swatchBg(p) {
   return P.mode === 'volume'
     ? `linear-gradient(110deg, ${p.hot[0]} 0%, ${p.hot[3]} 22%, ${p.ember} 45%, ${p.smoke} 72%, ${p.tail} 100%)`
@@ -2391,8 +2136,6 @@ for (const [k, q] of Object.entries(QUALITY)) {
   qSel.appendChild(o);
 }
 const qLabels = [...qSel.options].map((o) => o.textContent);
-// Smoke lists the 3D grid each quality gives for the current window shape instead of the particle count, and says
-// when the frame-rate governor runs a lower row than the one selected (the HUD shows the grid it runs)
 function qualityLabels() {
   const vol = P.mode === 'volume';
   [...qSel.options].forEach((o, i) => {
@@ -2403,8 +2146,6 @@ function qualityLabels() {
   info.textContent = lowered ? 'lowered to ' + QUALITY[volLevel()].label : '';
   info.title = lowered ? `The frame rate was too low, so ${MODE_LABEL.volume} runs a coarser 3D grid than the one selected` : '';
 }
-// The running effect's quality changed: Lava rebuilds its targets; Smoke's governor starts over from the new row,
-// without a cap (build3D resamples the scene into the new grid on the next frame)
 function qualityChanged() {
   if (P.mode === 'volume') {
     volDrop = 0;
@@ -2435,7 +2176,6 @@ for (const [group, defs] of Object.entries(SLIDERS)) {
   }
 }
 
-// byHand: the switch or A. The autopilot is remembered only then, not when drawing or reduced motion turns it off.
 function setToggle(key, val, byHand) {
   P[key] = val;
   const el = $('t-' + key);
@@ -2450,7 +2190,6 @@ for (const key of ['showSmoke', 'showParticles', 'cursorLight', 'auto']) {
   el.addEventListener('change', () => setToggle(key, el.checked, true));
 }
 
-// Shows the running effect's settings (in P) in every control, with its palette
 function fxApply() {
   setPalette(P.palette);
   qSel.value = P.quality;
@@ -2458,7 +2197,6 @@ function fxApply() {
   for (const k of ['showSmoke', 'showParticles', 'cursorLight']) $('t-' + k).checked = P[k];
   qualityLabels();
 }
-// Reset: the running effect back to its defaults, saved at once
 function fxReset() {
   const q = P.quality;
   Object.assign(P, FX_DEFAULTS);
@@ -2468,35 +2206,28 @@ function fxReset() {
 }
 $('btnReset').addEventListener('click', fxReset);
 
-// Effect: Lava (fine additive particle smoke) / Smoke (ray-marched 3D smoke solver). The 3D targets are built on the
-// first Smoke frame and kept afterwards, so switching back and forth keeps both scenes.
 const MODES = [['particles', 'mode-particles'], ['volume', 'mode-volume']];
 for (const [val, id] of MODES) $(id).textContent = MODE_LABEL[val];
 function setMode(m) {
   if (m !== 'volume' || !volOK) m = 'particles';
   if (m !== P.mode) {
-    // each effect has its own autopilot path: re-seed the brush on the new one, so it never strokes across the screen
     demo.on = false;
-    // and its own settings: save and park this one's, bring back the other's. Nothing is rebuilt: Lava's targets
-    // follow Lava's quality and Smoke's grid follows Smoke's, so both scenes survive the round trip.
     fxSaveNow();
     fx[P.mode] = fxPick();
     P.mode = m;
     Object.assign(P, fx[m]);
     fxApply();
   }
-  try { localStorage.setItem('krakatoa.mode', m); } catch (_) { /* storage is optional */ }
+  try { localStorage.setItem('krakatoa.mode', m); } catch (_) { }
   const vol = m === 'volume';
   const prevFocus = document.activeElement;
   for (const [val, id] of MODES) $(id).setAttribute('aria-pressed', String(m === val));
   $('g-volume').hidden = !vol;
-  // controls that only affect Lava's renderer
   for (const id of ['s-smoke', 's-particles']) $(id).parentElement.hidden = vol;
   for (const id of ['t-showSmoke', 't-showParticles']) $(id).closest('label').hidden = vol;
   $('hudPartBox').hidden = vol;
   $('hudPartSep').hidden = vol;
   $('btnReset').textContent = `Reset ${MODE_LABEL[m]} settings`;
-  // M on a control that this effect hides: keep keyboard focus in the panel, on the button of the effect now shown
   if (prevFocus && panel.contains(prevFocus) && !prevFocus.getClientRects().length) $(vol ? 'mode-volume' : 'mode-particles').focus();
   if (sliderSync.life) sliderSync.life();
   gov.slow = gov.fast = gov.n = gov.s = gov.fr.length = 0; gov.skip = 2;
@@ -2518,7 +2249,6 @@ $('btnClear').addEventListener('click', clearAll);
 
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
-  // Focused controls keep Space/Enter and their own keys; the letter and digit shortcuts still apply
   const ctl = e.target.closest && e.target.closest('input, select, textarea, button');
   if (ctl && (e.code === 'Space' || e.key === 'Enter' || !/^[mhca1-5]$/i.test(e.key))) return;
   if (ctl && ctl.tagName === 'SELECT') e.preventDefault(); // stop type-ahead, e.g. M selecting "Medium"
@@ -2530,13 +2260,11 @@ window.addEventListener('keydown', (e) => {
   else if (/^[1-5]$/.test(e.key)) pickPalette(+e.key - 1);
 });
 
-/* ------------------------------------------------------------------ */
-// Start in the effect the address names (#lava, #smoke, or the older #partiklar, #volym), else the one used last,
-// else Lava, with that effect's saved settings
+// --- Start ---
 const HASH_MODE = { '#lava': 'particles', '#partiklar': 'particles', '#smoke': 'volume', '#volym': 'volume' };
 const hashMode = () => HASH_MODE[location.hash.toLowerCase()];
 let startMode = P.mode;
-try { const m = localStorage.getItem('krakatoa.mode'); if (m === 'volume' || m === 'particles') startMode = m; } catch (_) { /* storage is optional */ }
+try { const m = localStorage.getItem('krakatoa.mode'); if (m === 'volume' || m === 'particles') startMode = m; } catch (_) { }
 startMode = hashMode() || startMode;
 if (startMode !== 'volume' || !volOK) startMode = 'particles';
 P.mode = startMode;
