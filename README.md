@@ -1,4 +1,4 @@
-# Krakatoa Smoke
+# Krakatoa
 
 [![Krakatoa: real-time 3D smoke and lava in the browser](media/preview.webp)](https://pagustafsson.github.io/krakatoa/media/krakatoa.mp4)
 
